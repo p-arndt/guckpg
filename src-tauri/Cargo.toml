@@ -1,0 +1,38 @@
+[package]
+name = "guckpg"
+version = "0.1.0"
+description = "Postgres client for the desktop"
+authors = ["p-arndt"]
+license = "MIT"
+repository = "https://github.com/p-arndt/guckpg"
+edition = "2024"
+rust-version = "1.90"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "guckpg_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-log = "2"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
+tokio-postgres = "0.7.18"
+tokio-postgres-rustls = "0.14.0"
+rustls-native-certs = "0.8.5"
+russh = { version = "0.65.0", default-features = false, features = ["ring", "rsa", "flate2"] }
+thiserror = "2.0.21"
+futures-util = "0.3.34"
+keyring = "4.2.0"
+uuid = { version = "1.29.0", features = ["v4", "serde"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -1,0 +1,27 @@
+# Local test targets: a Postgres and an SSH server that can reach it as
+# `postgres`, the same situation as a VPS with Postgres in a container.
+# `just db-up`, then `just test-it` runs the integration tests against both.
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: guckpg
+      POSTGRES_PASSWORD: guckpg
+      POSTGRES_DB: guckpg
+    ports:
+      - 127.0.0.1:55432:5432
+    healthcheck:
+      test: [CMD, pg_isready, -U, guckpg]
+      interval: 2s
+      retries: 30
+
+  ssh:
+    image: lscr.io/linuxserver/openssh-server:latest
+    environment:
+      USER_NAME: guckpg
+      USER_PASSWORD: guckpg
+      PASSWORD_ACCESS: 'true'
+      # The image disables TCP forwarding by default; this mod turns it on.
+      DOCKER_MODS: linuxserver/mods:openssh-server-ssh-tunnel
+    ports:
+      - 127.0.0.1:52222:2222

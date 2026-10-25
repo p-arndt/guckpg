@@ -1,0 +1,144 @@
+export type Cell = string | null;
+
+const CHAR_PX = 7.4;
+const PADDING_PX = 24;
+export const MIN_COL_PX = 60;
+export const MAX_COL_PX = 360;
+
+/** Width per column from the header and the first rows, clamped. */
+export function columnWidths(columns: string[], rows: Cell[][], sample = 200): number[] {
+	return columns.map((name, c) => {
+		let chars = name.length + 2;
+		for (let r = 0; r < Math.min(rows.length, sample); r++) {
+			const v = rows[r][c];
+			// Only the first line counts: cells render on one line.
+			const len = v === null ? 4 : v.indexOf('\n') === -1 ? v.length : v.indexOf('\n');
+			if (len > chars) chars = len;
+		}
+		return Math.round(Math.min(MAX_COL_PX, Math.max(MIN_COL_PX, chars * CHAR_PX + PADDING_PX)));
+	});
+}
+
+export function isNumeric(v: Cell): boolean {
+	return v !== null && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(v);
+}
+
+/** Tab-separated text that pastes into spreadsheets; NULL becomes empty. */
+export function toTsv(columns: string[] | null, rows: Cell[][]): string {
+	const escape = (v: Cell) => {
+		if (v === null) return '';
+		return /[\t\n\r"]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v;
+	};
+	const lines = rows.map((r) => r.map(escape).join('\t'));
+	if (columns) lines.unshift(columns.map(escape).join('\t'));
+	return lines.join('\n');
+}
+
+/** Rows to render for a scroll position, with some overscan. */
+export function visibleRange(
+	scrollTop: number,
+	viewportHeight: number,
+	rowHeight: number,
+	total: number,
+	overscan = 8
+): { start: number; end: number } {
+	const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+	const end = Math.min(total, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan);
+	return { start: Math.min(start, end), end };
+}
+
+/**
+ * Parse clipboard text from a spreadsheet or from `toTsv`: tabs between
+ * cells, newlines between rows, double quotes around cells with specials.
+ */
+export function parseTsv(text: string): string[][] {
+	const rows: string[][] = [];
+	let row: string[] = [];
+	let cell = '';
+	let i = 0;
+	let quoted = false;
+	const input = text.replace(/\r\n?/g, '\n').replace(/\n$/, '');
+	while (i < input.length) {
+		const c = input[i];
+		if (quoted) {
+			if (c === '"' && input[i + 1] === '"') {
+				cell += '"';
+				i += 2;
+				continue;
+			}
+			if (c === '"') quoted = false;
+			else cell += c;
+		} else if (c === '"' && cell === '') {
+			quoted = true;
+		} else if (c === '\t') {
+			row.push(cell);
+			cell = '';
+		} else if (c === '\n') {
+			row.push(cell);
+			rows.push(row);
+			row = [];
+			cell = '';
+		} else cell += c;
+		i++;
+	}
+	row.push(cell);
+	rows.push(row);
+	return rows;
+}
+
+/**
+ * Row indexes sorted by one column, NULLs last in both directions. Numbers
+ * compare numerically when both sides are numeric. Keys are computed once
+ * per row: testing and parsing inside the comparator would run them
+ * n·log(n) times, which is slow for 100k rows.
+ */
+export function sortOrder(rows: Cell[][], col: number, dir: 'asc' | 'desc'): number[] {
+	const sign = dir === 'asc' ? 1 : -1;
+	const keys = rows.map((r) => {
+		const v = r[col];
+		return { v, n: isNumeric(v) ? Number(v) : NaN };
+	});
+	const indexes = rows.map((_, i) => i);
+	return indexes.sort((a, b) => {
+		const x = keys[a];
+		const y = keys[b];
+		if (x.v === y.v) return 0;
+		if (x.v === null) return 1;
+		if (y.v === null) return -1;
+		if (!Number.isNaN(x.n) && !Number.isNaN(y.n)) return (x.n - y.n) * sign;
+		return x.v.localeCompare(y.v) * sign;
+	});
+}
+
+/** Left edge of each column, plus the total width as the last entry. */
+export function columnOffsets(widths: number[]): number[] {
+	const offsets = [0];
+	for (const w of widths) offsets.push(offsets[offsets.length - 1] + w);
+	return offsets;
+}
+
+/** Columns overlapping the viewport `[left, left + width)`, with overscan. */
+export function visibleColumns(
+	offsets: number[],
+	left: number,
+	width: number,
+	overscan = 2
+): { start: number; end: number } {
+	const count = offsets.length - 1;
+	let start = 0;
+	while (start < count && offsets[start + 1] <= left) start++;
+	let end = start;
+	while (end < count && offsets[end] < left + width) end++;
+	return { start: Math.max(0, start - overscan), end: Math.min(count, end + overscan) };
+}
+
+/** Longest text a cell renders; the rest is only visible in the value dialog. */
+export const CELL_TEXT_MAX = 500;
+
+/** A cell's text for the grid: first line only, capped. */
+export function cellText(v: string): string {
+	const nl = v.indexOf('\n');
+	const line = nl === -1 ? v : v.slice(0, nl);
+	const capped = line.length > CELL_TEXT_MAX ? line.slice(0, CELL_TEXT_MAX) : line;
+	return capped.length < v.length ? capped + ' …' : capped;
+}

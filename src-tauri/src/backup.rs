@@ -166,23 +166,23 @@ mod tests {
     #[test]
     fn rejects_unsafe_or_unsupported_targets() {
         let mut cfg = config();
-        assert!(validate(&cfg, "", "/tmp/a", false).is_err());
+        let path = std::env::temp_dir().join("guckpg-backup-test");
+        let path = path.to_str().unwrap();
+        assert!(validate(&cfg, "", path, false).is_err());
         assert!(validate(&cfg, "db", "relative", false).is_err());
         cfg.read_only = true;
         assert_eq!(
-            validate(&cfg, "db", "/tmp/a", true)
-                .unwrap_err()
-                .to_string(),
+            validate(&cfg, "db", path, true).unwrap_err().to_string(),
             crate::guard::READ_ONLY_MESSAGE
         );
-        assert!(validate(&cfg, "db", "/tmp/a", false).is_ok());
+        assert!(validate(&cfg, "db", path, false).is_ok());
         cfg.ssh = Some(SshConfig {
             host: "host".into(),
             port: 22,
             user: "user".into(),
             auth: SshAuth::Agent,
         });
-        assert!(validate(&cfg, "db", "/tmp/a", false).is_err());
+        assert!(validate(&cfg, "db", path, false).is_err());
     }
     #[test]
     fn never_overwrites_an_existing_archive() {

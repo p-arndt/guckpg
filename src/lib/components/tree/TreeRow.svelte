@@ -28,6 +28,7 @@
 </script>
 
 <button
+	title={label}
 	{...rest}
 	type="button"
 	class={cn(
@@ -35,7 +36,6 @@
 		className
 	)}
 	style:padding-left="{depth * 14 + 4}px"
-	title={label}
 >
 	<span class="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
 		{#if loading}
@@ -49,5 +49,7 @@
 	{#if icon}<span class="flex shrink-0 items-center text-muted-foreground">{@render icon()}</span
 		>{/if}
 	<span class="min-w-0 flex-1 truncate">{label}</span>
-	{#if trailing}{@render trailing()}{/if}
+	{#if trailing}<span class="flex shrink-0 items-center gap-1.5 whitespace-nowrap"
+			>{@render trailing()}</span
+		>{/if}
 </button>

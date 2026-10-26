@@ -31,6 +31,10 @@
 	title={label}
 	{...rest}
 	type="button"
+	role="treeitem"
+	aria-level={depth + 1}
+	aria-expanded={expanded}
+	aria-busy={loading || undefined}
 	class={cn(
 		'group flex h-7 w-full items-center gap-1.5 rounded-lg pr-2 text-left text-[13px] text-ink-2 transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground data-[state=open]:bg-hover data-[state=open]:text-foreground',
 		className

@@ -8,9 +8,9 @@
 	import * as Select from '#lib/components/ui/select/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
-	import { api, errorMessage, isAppError, type CompletionTable } from '#lib/api.js';
+	import type { CompletionTable } from '#lib/api.js';
 	import { statementAt } from '#lib/sql-text.js';
-	import { confirmDiscard } from '#lib/state/confirm.svelte.js';
+	import { catalog } from '#lib/state/catalog.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import type { QueryTab } from '#lib/state/tabs.svelte.js';
 	import { buildSql, emptyModel } from '#lib/query-builder.js';
@@ -25,11 +25,9 @@
 
 	let { tab }: Props = $props();
 
-	let plan = $state<string | null>(null);
 	let editor = $state<SqlEditor | null>(null);
 	let databases = $state<string[]>([]);
 	let completion = $state<CompletionTable[]>([]);
-	let maxRows = $state('1000');
 	let editorPane = $state<ReturnType<typeof Resizable.Pane> | null>(null);
 	/** Editor height before the builder took more room, restored when it closes. */
 	let sizeBeforeBuilder: number | null = null;
@@ -63,19 +61,28 @@
 	const quietTrigger =
 		'h-7 gap-1.5 border-transparent bg-transparent text-[13px] shadow-none hover:bg-hover dark:bg-transparent dark:hover:bg-hover data-[state=open]:bg-hover';
 
+	// The cleanups drop answers for a connection or database the tab has moved away from.
 	$effect(() => {
-		const id = tab.connectionId;
-		api.listDatabases(id).then(
-			(list) => (databases = list),
-			() => (databases = [tab.database])
+		const { connectionId, database } = tab;
+		let current = true;
+		catalog.databases(connectionId).then(
+			(list) => {
+				if (current) databases = list;
+			},
+			() => {
+				if (current) databases = [database];
+			}
 		);
+		return () => {
+			current = false;
+		};
 	});
 
 	$effect(() => {
 		const { connectionId, database } = tab;
 		let current = true;
 		completion = [];
-		api.completionTables(connectionId, database).then(
+		catalog.completionTables(connectionId, database).then(
 			(tables) => {
 				if (current) completion = tables;
 			},
@@ -88,12 +95,14 @@
 		};
 	});
 
-	/** Last executed text, re-run after saving grid edits. */
-	let lastRun: { text: string; from: number; inEditor: boolean } | null = null;
+	async function run(text: string, from: number, inEditor = true) {
+		editor?.markError(null);
+		await tab.execute(text, from, inEditor);
+		editor?.markError(tab.errorOffset);
+	}
 
-	async function execute(all: boolean) {
+	function execute(all: boolean) {
 		if (tab.running || !editor) return;
-		if (!(await confirmDiscard(tab.dirty))) return;
 		let text: string;
 		let from: number;
 		const selection = editor.selection();
@@ -107,35 +116,20 @@
 			if (!statement) return;
 			({ text, from } = statement);
 		}
-		if (!text.trim()) return;
-		await run(text, from);
+		void run(text, from);
 	}
 
-	async function explain() {
-		if (tab.running || !editor || !(await confirmDiscard(tab.dirty))) return;
+	function explain() {
+		if (tab.running || !editor) return;
 		const text =
 			tab.builderOpen && builder
 				? buildSql(builder).sql
 				: (editor.selection()?.text ?? statementAt(tab.sql, editor.cursor())?.text);
-		if (!text?.trim()) return;
-		tab.running = true;
-		tab.error = null;
-		plan = null;
-		try {
-			const output = await api.explainQuery(tab.id, tab.connectionId, tab.database, text);
-			plan = output.results[0]?.rows[0]?.[0] ?? '';
-		} catch (e) {
-			tab.output = null;
-			tab.error = isAppError(e) ? e : { kind: 'message', message: errorMessage(e) };
-		} finally {
-			tab.running = false;
-		}
+		if (text) void tab.explain(text);
 	}
 
-	async function runBuilt(sql: string) {
-		if (tab.running) return;
-		if (!(await confirmDiscard(tab.dirty))) return;
-		await run(sql, 0, false);
+	function runBuilt(sql: string) {
+		void run(sql, 0, false);
 	}
 
 	function openInEditor(sql: string) {
@@ -143,44 +137,10 @@
 		toggleBuilder();
 	}
 
-	/** `inEditor` is false for builder SQL, whose error positions do not map onto the editor text. */
-	async function run(text: string, from: number, inEditor = true) {
-		if (!editor) return;
-		plan = null;
-		lastRun = { text, from, inEditor };
-		tab.running = true;
-		tab.error = null;
-		tab.ranFrom = from;
-		editor.markError(null);
-		try {
-			tab.output = await api.runQuery(
-				tab.id,
-				tab.connectionId,
-				tab.database,
-				text,
-				Number(maxRows)
-			);
-		} catch (e) {
-			tab.output = null;
-			tab.error = isAppError(e) ? e : { kind: 'message', message: errorMessage(e) };
-			if (tab.error.kind === 'postgres' && tab.error.position !== null) {
-				if (inEditor) editor.markError(from + tab.error.position - 1);
-			}
-		} finally {
-			tab.running = false;
-		}
-	}
-
-	function rerun() {
-		if (lastRun) void run(lastRun.text, lastRun.from, lastRun.inEditor);
-	}
-
-	async function cancel() {
-		try {
-			await api.cancelQuery(tab.id);
-		} catch (e) {
-			tab.error = isAppError(e) ? e : { kind: 'message', message: errorMessage(e) };
-		}
+	async function rerun() {
+		editor?.markError(null);
+		await tab.rerun();
+		editor?.markError(tab.errorOffset);
 	}
 </script>
 
@@ -197,10 +157,14 @@
 				{/each}
 			</Select.Content>
 		</Select.Root>
-		<Select.Root type="single" bind:value={maxRows}>
+		<Select.Root
+			type="single"
+			value={String(tab.maxRows)}
+			onValueChange={(v) => (tab.maxRows = Number(v))}
+		>
 			<Select.Trigger size="sm" class={quietTrigger} aria-label="Row limit">
 				<span class="text-muted-foreground">Limit</span>
-				<span class="measured">{rowLimitLabel(maxRows)}</span>
+				<span class="measured">{rowLimitLabel(String(tab.maxRows))}</span>
 			</Select.Trigger>
 			<Select.Content>
 				{#each ['100', '1000', '10000', '100000'] as n (n)}
@@ -220,7 +184,7 @@
 			</Button>
 			<Button size="sm" variant="ghost" disabled={tab.running} onclick={explain}>Explain</Button>
 			{#if tab.running}
-				<Button size="sm" variant="ghost" class="text-bad" onclick={cancel}>
+				<Button size="sm" variant="ghost" class="text-bad" onclick={() => tab.cancel()}>
 					<SquareIcon /> Stop
 				</Button>
 			{/if}
@@ -251,7 +215,7 @@
 							onclick={() => {
 								if (tab.builderOpen && builder) {
 									const { sql } = buildSql(builder);
-									if (sql) void runBuilt(sql);
+									if (sql) runBuilt(sql);
 								} else void execute(false);
 							}}
 						>
@@ -297,8 +261,8 @@
 		</Resizable.Pane>
 		<Resizable.Handle />
 		<Resizable.Pane defaultSize={55} minSize={10}>
-			{#if plan !== null}
-				<ExplainPlan value={plan} />
+			{#if tab.plan !== null}
+				<ExplainPlan value={tab.plan} />
 			{:else}
 				<ResultsPanel
 					running={tab.running}

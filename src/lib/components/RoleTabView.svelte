@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { plural } from '#lib/format.js';
 	import { onMount } from 'svelte';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import LockIcon from '@lucide/svelte/icons/lock';
@@ -18,10 +19,8 @@
 	} from '#lib/api.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
-	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
-	import { highlightSql } from '#lib/highlight.js';
 	import {
 		DATABASE_PRIVILEGES,
 		SCHEMA_PRIVILEGES,
@@ -29,14 +28,19 @@
 		draftOf,
 		filterObjects,
 		grantsOf,
+		latestRequest,
+		membershipCandidates as candidatesFor,
+		objectKey,
 		planChanges,
-		targetKey,
-		targetOf,
+		roleSummary,
 		toggleColumn,
 		toggleGrant,
 		type Grants,
 		type RoleDraft
 	} from '#lib/role-editor.js';
+	import { joinStatements, SqlReview } from '#lib/review.svelte.js';
+	import PrivilegeTable from './role/PrivilegeTable.svelte';
+	import ReviewSqlDialog from './ReviewSqlDialog.svelte';
 	import { confirmation, confirmDiscard } from '#lib/state/confirm.svelte.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { roleEvents } from '#lib/state/roles.svelte.js';
@@ -70,13 +74,6 @@
 		},
 		{ key: 'bypassRls', label: 'Bypass row-level security', hint: 'Ignores every RLS policy.' }
 	];
-	const LABELS: Record<string, string> = {
-		TEMPORARY: 'Temp',
-		REFERENCES: 'References'
-	};
-	const label = (privilege: string) =>
-		LABELS[privilege] ?? privilege.charAt(0) + privilege.slice(1).toLowerCase();
-
 	let section = $state<Section>('general');
 	let loading = $state(true);
 	let error = $state<string | null>(null);
@@ -93,11 +90,12 @@
 	let filter = $state('');
 	let onlyWithAccess = $state(false);
 
-	let reviewing = $state(false);
-	let busy = $state(false);
-	let applyError = $state<string | null>(null);
-	let sql = $state<string[]>([]);
+	const review = new SqlReview();
+	const beginPrivilegesRequest = latestRequest();
+	/** Dropping the role is not a reviewed change, but it still blocks the editor. */
+	let dropping = $state(false);
 
+	let busy = $derived(review.busy || dropping);
 	let readOnly = $derived(connections.get(tab.connectionId)?.readOnly !== false);
 	let locked = $derived(readOnly || busy);
 	let planned = $derived(
@@ -117,25 +115,10 @@
 	let tables = $derived(
 		privileges ? filterObjects(privileges.relations, filter, onlyWithAccess, objectGrants) : []
 	);
-	let membershipCandidates = $derived(
-		details && draft
-			? details.otherRoles
-					.filter((r) => !draft!.memberOf.includes(r))
-					// Predefined pg_* roles are useful but numerous, so they go last.
-					.sort((a, b) => Number(a.startsWith('pg_')) - Number(b.startsWith('pg_')))
-			: []
-	);
-	let summary = $derived.by(() => {
-		if (!details) return '';
-		const parts = [details.canLogin ? 'Can log in' : 'Cannot log in'];
-		if (details.memberOf.length)
-			parts.push(`member of ${details.memberOf.map((m) => m.role).join(', ')}`);
-		if (details.members.length)
-			parts.push(`${details.members.length} member${details.members.length === 1 ? '' : 's'}`);
-		if (details.validUntil) parts.push(`expires ${details.validUntil}`);
-		return parts.join(' · ');
-	});
+	let membershipCandidates = $derived(details && draft ? candidatesFor(details, draft) : []);
+	let summary = $derived(details ? roleSummary(details) : '');
 
+	// The tab owner (the page) reads tab.dirty directly; there is no onDirtyChange to report to.
 	$effect(() => {
 		tab.dirty = dirty;
 	});
@@ -166,20 +149,30 @@
 	}
 
 	async function loadPrivileges() {
+		const current = beginPrivilegesRequest();
 		privilegesLoading = true;
 		privilegesError = null;
 		try {
 			const loaded = await api.rolePrivileges(tab.connectionId, tab.database, tab.role);
+			if (!current()) return;
 			privileges = loaded;
 			const grants = grantsOf([...loaded.schemas, ...loaded.relations]);
 			originalObjectGrants = grants;
 			objectGrants = { ...grants };
 		} catch (e) {
+			if (!current()) return;
 			privileges = null;
+			clearObjectGrants();
 			privilegesError = errorMessage(e);
 		} finally {
-			privilegesLoading = false;
+			if (current()) privilegesLoading = false;
 		}
+	}
+
+	/** Object grants belong to one database; keeping them across a switch would apply them to the next. */
+	function clearObjectGrants() {
+		originalObjectGrants = {};
+		objectGrants = {};
 	}
 
 	async function refresh() {
@@ -193,6 +186,7 @@
 		if (!(await confirmDiscard(objectChanges))) return;
 		tab.database = database;
 		privileges = null;
+		clearObjectGrants();
 		await loadPrivileges();
 	}
 
@@ -203,38 +197,25 @@
 		objectGrants = { ...originalObjectGrants };
 	}
 
-	async function review() {
-		if (!planned || planned.problem || !dirty || busy) return;
-		busy = true;
-		applyError = null;
-		try {
-			sql = await api.previewRoleChanges(planned.changes);
-			reviewing = true;
-		} catch (e) {
-			applyError = errorMessage(e);
-		} finally {
-			busy = false;
-		}
+	function startReview() {
+		const changes = planned?.changes;
+		if (!changes || planned?.problem || !dirty || busy) return;
+		void review.preview(() => api.previewRoleChanges(changes));
 	}
 
-	async function apply() {
-		if (!planned || busy) return;
-		busy = true;
-		applyError = null;
-		try {
-			await api.applyRoleChanges(tab.connectionId, tab.database, planned.changes);
-			if (planned.changes.rename) {
-				tab.role = planned.changes.rename;
-				tab.title = planned.changes.rename;
+	function apply() {
+		const changes = planned?.changes;
+		if (!changes || busy) return;
+		void review.apply(async () => {
+			await api.applyRoleChanges(tab.connectionId, tab.database, changes);
+			if (changes.rename) {
+				tab.role = changes.rename;
+				tab.title = changes.rename;
 			}
-			reviewing = false;
+			review.close(true);
 			roleEvents.changed();
 			await load();
-		} catch (e) {
-			applyError = errorMessage(e);
-		} finally {
-			busy = false;
-		}
+		});
 	}
 
 	async function drop() {
@@ -247,7 +228,7 @@
 			destructive: true
 		});
 		if (!ok) return;
-		busy = true;
+		dropping = true;
 		error = null;
 		try {
 			await api.dropRole(tab.connectionId, details.name);
@@ -256,18 +237,18 @@
 		} catch (e) {
 			error = errorMessage(e);
 		} finally {
-			busy = false;
+			dropping = false;
 		}
 	}
 
 	function toggle(object: ObjectPrivileges, privilege: string) {
-		const key = targetKey(targetOf(object));
+		const key = objectKey(object);
 		if (object.kind === 'database') databaseGrants = toggleGrant(databaseGrants, key, privilege);
 		else objectGrants = toggleGrant(objectGrants, key, privilege);
 	}
 
 	function toggleAll(objects: ObjectPrivileges[], privilege: string) {
-		const keys = objects.filter((o) => !o.owner).map((o) => targetKey(targetOf(o)));
+		const keys = objects.filter((o) => !o.owner).map(objectKey);
 		if (!keys.length) return;
 		objectGrants = toggleColumn(objectGrants, keys, privilege);
 	}
@@ -276,53 +257,6 @@
 		tabs.openRole(tab.connectionId, tab.database, name);
 	}
 </script>
-
-{#snippet grantCell(object: ObjectPrivileges, privilege: string)}
-	{@const key = targetKey(targetOf(object))}
-	{@const grants = object.kind === 'database' ? databaseGrants : objectGrants}
-	{@const original = object.kind === 'database' ? originalDatabaseGrants : originalObjectGrants}
-	{@const granted = grants[key]?.includes(privilege) ?? false}
-	{@const changed = granted !== (original[key]?.includes(privilege) ?? false)}
-	{@const inherited =
-		!object.owner &&
-		!granted &&
-		!original[key]?.includes(privilege) &&
-		object.effective.includes(privilege)}
-	<td
-		class="px-2 py-1 text-center"
-		class:inherited
-		class:bg-signal-soft={changed}
-		title={object.owner
-			? 'Owners have every privilege'
-			: inherited
-				? 'Allowed through PUBLIC or a member role'
-				: undefined}
-	>
-		<input
-			type="checkbox"
-			class="grant"
-			checked={granted || object.owner}
-			disabled={locked || object.owner}
-			aria-label="{privilege} on {object.schema ? `${object.schema}.` : ''}{object.name}"
-			onchange={() => toggle(object, privilege)}
-		/>
-	</td>
-{/snippet}
-
-{#snippet objectName(object: ObjectPrivileges)}
-	<td class="max-w-0 py-1 pr-3 pl-4">
-		<div class="flex min-w-0 items-center gap-2">
-			<span class="measured truncate"
-				>{#if object.schema}<span class="text-muted-foreground">{object.schema}.</span
-					>{/if}{object.name}</span
-			>
-			{#if object.kind !== 'table' && object.kind !== 'database' && object.kind !== 'schema'}
-				<span class="text-[11px] text-muted-foreground">{object.kind}</span>
-			{/if}
-			{#if object.owner}<span class="chip">owner</span>{/if}
-		</div>
-	</td>
-{/snippet}
 
 {#snippet sectionTitle(title: string, hint?: string)}
 	<div class="flex flex-col gap-0.5">
@@ -605,26 +539,15 @@
 					<section class="grid max-w-3xl gap-3">
 						{@render sectionTitle('Databases')}
 						<div class="overflow-hidden rounded-lg border">
-							<table class="w-full table-fixed text-[13px]">
-								<thead class="bg-chrome text-xs text-muted-foreground">
-									<tr class="border-b">
-										<th class="py-1.5 pl-4 text-left font-normal">Database</th>
-										{#each DATABASE_PRIVILEGES as privilege (privilege)}
-											<th class="w-24 py-1.5 font-normal">{label(privilege)}</th>
-										{/each}
-									</tr>
-								</thead>
-								<tbody>
-									{#each details.databases as database (database.name)}
-										<tr class="border-b last:border-b-0 hover:bg-hover">
-											{@render objectName(database)}
-											{#each DATABASE_PRIVILEGES as privilege (privilege)}
-												{@render grantCell(database, privilege)}
-											{/each}
-										</tr>
-									{/each}
-								</tbody>
-							</table>
+							<PrivilegeTable
+								heading="Database"
+								objects={details.databases}
+								privileges={DATABASE_PRIVILEGES}
+								grants={databaseGrants}
+								original={originalDatabaseGrants}
+								{locked}
+								onToggle={toggle}
+							/>
 						</div>
 					</section>
 
@@ -653,26 +576,15 @@
 							<p class="text-xs text-bad" role="alert">{privilegesError}</p>
 						{:else if privileges}
 							<div class="max-w-3xl overflow-hidden rounded-lg border">
-								<table class="w-full table-fixed text-[13px]">
-									<thead class="bg-chrome text-xs text-muted-foreground">
-										<tr class="border-b">
-											<th class="py-1.5 pl-4 text-left font-normal">Schema</th>
-											{#each SCHEMA_PRIVILEGES as privilege (privilege)}
-												<th class="w-24 py-1.5 font-normal">{label(privilege)}</th>
-											{/each}
-										</tr>
-									</thead>
-									<tbody>
-										{#each privileges.schemas as schema (schema.name)}
-											<tr class="border-b last:border-b-0 hover:bg-hover">
-												{@render objectName(schema)}
-												{#each SCHEMA_PRIVILEGES as privilege (privilege)}
-													{@render grantCell(schema, privilege)}
-												{/each}
-											</tr>
-										{/each}
-									</tbody>
-								</table>
+								<PrivilegeTable
+									heading="Schema"
+									objects={privileges.schemas}
+									privileges={SCHEMA_PRIVILEGES}
+									grants={objectGrants}
+									original={originalObjectGrants}
+									{locked}
+									onToggle={toggle}
+								/>
 							</div>
 
 							<div class="flex flex-wrap items-center gap-3">
@@ -685,43 +597,18 @@
 								>
 							</div>
 							<div class="overflow-hidden rounded-lg border">
-								<table class="w-full min-w-[44rem] table-fixed text-[13px]">
-									<thead class="bg-chrome text-xs text-muted-foreground">
-										<tr class="border-b">
-											<th class="py-1.5 pl-4 text-left font-normal">Table</th>
-											{#each TABLE_PRIVILEGES as privilege (privilege)}
-												<th class="w-24 py-1 font-normal">
-													<button
-														type="button"
-														class="rounded px-1.5 py-0.5 hover:bg-hover hover:text-foreground disabled:pointer-events-none"
-														title="Toggle {privilege} on all {tables.length} shown tables"
-														disabled={locked || !tables.length}
-														onclick={() => toggleAll(tables, privilege)}>{label(privilege)}</button
-													>
-												</th>
-											{/each}
-										</tr>
-									</thead>
-									<tbody>
-										{#each tables as table (`${table.schema}.${table.name}`)}
-											<tr class="border-b last:border-b-0 hover:bg-hover">
-												{@render objectName(table)}
-												{#each TABLE_PRIVILEGES as privilege (privilege)}
-													{@render grantCell(table, privilege)}
-												{/each}
-											</tr>
-										{:else}
-											<tr>
-												<td
-													colspan={TABLE_PRIVILEGES.length + 1}
-													class="px-4 py-2.5 text-muted-foreground"
-												>
-													{privileges.relations.length ? 'No matching tables.' : 'No tables.'}
-												</td>
-											</tr>
-										{/each}
-									</tbody>
-								</table>
+								<PrivilegeTable
+									class="w-full min-w-[44rem] table-fixed text-[13px]"
+									heading="Table"
+									objects={tables}
+									privileges={TABLE_PRIVILEGES}
+									grants={objectGrants}
+									original={originalObjectGrants}
+									{locked}
+									onToggle={toggle}
+									onToggleAll={(privilege) => toggleAll(tables, privilege)}
+									empty={privileges.relations.length ? 'No matching tables.' : 'No tables.'}
+								/>
 							</div>
 						{/if}
 					</section>
@@ -737,14 +624,14 @@
 			{:else if dirty || planned?.problem}
 				{#if planned?.problem}
 					<span class="px-1 text-bad">{planned.problem}</span>
-				{:else if applyError && !reviewing}
-					<span class="truncate px-1 text-bad" title={applyError}>{applyError}</span>
+				{:else if review.error && !review.reviewing}
+					<span class="truncate px-1 text-bad" title={review.error}>{review.error}</span>
 				{/if}
 				<span class="ml-auto px-1 font-medium text-signal-text">
 					<span class="measured">{dirty}</span> pending change{dirty === 1 ? '' : 's'}
 				</span>
 				<Button size="xs" variant="ghost" disabled={busy} onclick={discard}>Discard</Button>
-				<Button size="xs" disabled={busy || !!planned?.problem || !dirty} onclick={review}>
+				<Button size="xs" disabled={busy || !!planned?.problem || !dirty} onclick={startReview}>
 					{#if busy}<LoaderIcon class="animate-spin" />{/if}
 					Review & apply
 				</Button>
@@ -755,49 +642,25 @@
 	{/if}
 </div>
 
-<Dialog.Root
-	open={reviewing}
-	onOpenChange={(open) => {
-		if (!open && !busy) reviewing = false;
-	}}
+<ReviewSqlDialog
+	open={review.reviewing}
+	title="Review changes"
+	sql={joinStatements(review.sql, '\n')}
+	confirmLabel="Apply {plural(dirty, 'change')}"
+	busy={review.busy}
+	error={review.error}
+	onConfirm={apply}
+	onClose={() => review.close()}
 >
-	<Dialog.Content class="sm:max-w-3xl" showCloseButton={!busy}>
-		<Dialog.Header>
-			<Dialog.Title>Review changes</Dialog.Title>
-			<Dialog.Description>
-				{dirty} change{dirty === 1 ? '' : 's'} to role
-				<span class="measured">{details?.name}</span>, run in one transaction. Passwords are sent as
-				a SCRAM hash, never in plain text.
-			</Dialog.Description>
-		</Dialog.Header>
-		{#if applyError}<p role="alert" class="text-xs text-bad">{applyError}</p>{/if}
-		<pre
-			class="measured max-h-[55vh] overflow-auto rounded-lg border bg-background p-3 text-xs whitespace-pre-wrap select-text">{#each sql as statement, n (n)}{#each highlightSql(statement + ';') as token, t (t)}{#if token.classes}<span
-							class={token.classes}>{token.text}</span
-						>{:else}{token.text}{/if}{/each}{n < sql.length - 1 ? '\n' : ''}{/each}</pre>
-		<Dialog.Footer>
-			<Button variant="outline" disabled={busy} onclick={() => (reviewing = false)}>Cancel</Button>
-			<Button disabled={busy} onclick={apply}>
-				{#if busy}<LoaderIcon class="animate-spin" />{/if}
-				Apply {dirty} change{dirty === 1 ? '' : 's'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
+	{#snippet description()}
+		{plural(dirty, 'change')} to role
+		<span class="measured">{details?.name}</span>, run in one transaction. Passwords are sent as a
+		SCRAM hash, never in plain text.
+	{/snippet}
+</ReviewSqlDialog>
 
 <style>
-	.grant {
-		width: 0.875rem;
-		height: 0.875rem;
-		accent-color: var(--color-action);
-		cursor: pointer;
-		vertical-align: middle;
-	}
 	.inherited {
 		background: color-mix(in oklab, var(--color-ok) 18%, transparent);
-	}
-	.grant:disabled {
-		cursor: default;
-		opacity: 0.55;
 	}
 </style>

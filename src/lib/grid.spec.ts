@@ -7,7 +7,10 @@ import {
 	columnOffsets,
 	columnWidths,
 	isNumeric,
+	cycleSort,
+	fromTsv,
 	parseTsv,
+	pastedValue,
 	rowAt,
 	rowSpan,
 	sortOrder,
@@ -77,6 +80,10 @@ describe('toTsv', () => {
 	it('can omit the header', () => {
 		expect(toTsv(null, [['a', 'b']])).toBe('a\tb');
 	});
+
+	it('writes NULL and DEFAULT empty but an empty string quoted', () => {
+		expect(toTsv(null, [[null, '', undefined, 'x']])).toBe('\t""\t\tx');
+	});
 });
 
 describe('visibleRange', () => {
@@ -109,6 +116,50 @@ describe('parseTsv', () => {
 			['2', 'multi\nline', '']
 		];
 		expect(parseTsv(toTsv(null, rows))).toEqual(rows);
+	});
+});
+
+describe('fromTsv', () => {
+	it('reads empty fields as NULL and quoted empties as empty strings', () => {
+		expect(fromTsv('a\t\t""\n\tb')).toEqual([
+			['a', null, ''],
+			[null, 'b']
+		]);
+	});
+
+	it('round-trips NULL and empty strings through toTsv', () => {
+		const rows = [
+			['1', null, ''],
+			[null, 'say "hi"', 'multi\nline']
+		];
+		expect(fromTsv(toTsv(null, rows))).toEqual(rows);
+	});
+
+	it('reads a lone empty clipboard as one NULL cell', () => {
+		expect(fromTsv('')).toEqual([[null]]);
+	});
+});
+
+describe('pastedValue', () => {
+	it('turns NULL into DEFAULT only in new rows', () => {
+		expect(pastedValue(null, true)).toBeUndefined();
+		expect(pastedValue(null, false)).toBeNull();
+		expect(pastedValue('', true)).toBe('');
+		expect(pastedValue('x', false)).toBe('x');
+	});
+});
+
+describe('cycleSort', () => {
+	it('goes ascending, descending, off', () => {
+		const asc = cycleSort(null, 'a');
+		expect(asc).toEqual({ column: 'a', dir: 'asc' });
+		const desc = cycleSort(asc, 'a');
+		expect(desc).toEqual({ column: 'a', dir: 'desc' });
+		expect(cycleSort(desc, 'a')).toBeNull();
+	});
+
+	it('starts ascending on another column', () => {
+		expect(cycleSort({ column: 'a', dir: 'desc' }, 'b')).toEqual({ column: 'b', dir: 'asc' });
 	});
 });
 
@@ -174,5 +225,34 @@ describe('rowAt', () => {
 		expect(rowAt(-50, 32, 28, 10)).toBe(0);
 		expect(rowAt(10_000, 32, 28, 10)).toBe(9);
 		expect(rowAt(100, 32, 28, 0)).toBe(0);
+	});
+});
+
+describe('sortOrder with exact numbers', () => {
+	const sorted = (values: string[]) =>
+		sortOrder(
+			values.map((v) => [v]),
+			0,
+			'asc'
+		).map((i) => values[i]);
+
+	it('orders bigints beyond 2^53 exactly', () => {
+		expect(sorted(['9007199254740993', '9007199254740992', '9007199254740994'])).toEqual([
+			'9007199254740992',
+			'9007199254740993',
+			'9007199254740994'
+		]);
+	});
+
+	it('handles signs, lengths, decimals and exponents', () => {
+		expect(
+			sorted(['10', '-2', '0.5', '-10', '0', '2', '1e1', '1.25e-1', '-0.0', '100.001'])
+		).toEqual(['-10', '-2', '0', '-0.0', '1.25e-1', '0.5', '2', '10', '1e1', '100.001']);
+	});
+
+	it('puts numbers before text so mixed columns sort consistently', () => {
+		expect(sorted(['b', '10', 'a', '9', '1x'])).toEqual(['9', '10', '1x', 'a', 'b']);
+		// Any input order gives the same result when the comparator is transitive.
+		expect(sorted(['a', '9', '1x', 'b', '10'])).toEqual(['9', '10', '1x', 'a', 'b']);
 	});
 });

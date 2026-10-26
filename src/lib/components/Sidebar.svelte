@@ -6,7 +6,7 @@
 	import { toast } from 'svelte-sonner';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { errorMessage, type ConnectionConfig, type Placement } from '#lib/api.js';
-	import { moveConnection, renameFolder, sidebarLayout } from '#lib/sidebar.js';
+	import { moveConnection, renameFolder, sidebarLayout, treeKeyMove } from '#lib/sidebar.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { prompt } from '#lib/state/prompt.svelte.js';
 	import { sidebar } from '#lib/state/sidebar.svelte.js';
@@ -87,6 +87,24 @@
 		await arrange(renameFolder(connections.list, name, null));
 	}
 
+	/** Arrow keys move between the rows the tree shows; rows know their level and state. */
+	function onTreeKeydown(e: KeyboardEvent & { currentTarget: HTMLElement }) {
+		const target = e.target as HTMLElement;
+		if (target.getAttribute('role') !== 'treeitem') return;
+		const rows = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="treeitem"]')];
+		const items = rows.map((row) => ({
+			level: Number(row.getAttribute('aria-level')),
+			expanded: row.hasAttribute('aria-expanded')
+				? row.getAttribute('aria-expanded') === 'true'
+				: undefined
+		}));
+		const move = treeKeyMove(items, rows.indexOf(target), e.key);
+		if (!move) return;
+		e.preventDefault();
+		if ('focus' in move) rows[move.focus].focus();
+		else rows[move.toggle].click();
+	}
+
 	function onRootDragOver(e: DragEvent) {
 		if (!sidebar.dragging) return;
 		e.preventDefault();
@@ -160,7 +178,13 @@
 	</div>
 {/if}
 
-<div class="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2" role="tree">
+<div
+	class="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2"
+	role="tree"
+	aria-label="Connections"
+	tabindex="-1"
+	onkeydown={onTreeKeydown}
+>
 	{#each layout.folders as folder (folder.name)}
 		<FolderNode
 			name={folder.name}

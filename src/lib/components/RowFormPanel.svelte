@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
+	import { dragPointer } from '#lib/drag.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import {
 		clampPanelWidth,
@@ -101,21 +102,24 @@
 		);
 	});
 
+	let stopResize: (() => void) | null = null;
+	onDestroy(() => stopResize?.());
+
 	function startResize(event: PointerEvent) {
 		event.preventDefault();
 		const startX = event.clientX;
 		const startWidth = width;
 		const available = panel.parentElement?.clientWidth ?? 1200;
-		const move = (e: PointerEvent) => {
-			width = clampPanelWidth(startWidth + startX - e.clientX, available);
-		};
-		const up = () => {
-			window.removeEventListener('pointermove', move);
-			window.removeEventListener('pointerup', up);
-			localStorage.setItem(WIDTH_KEY, String(width));
-		};
-		window.addEventListener('pointermove', move);
-		window.addEventListener('pointerup', up);
+		stopResize?.();
+		stopResize = dragPointer(event, {
+			move: (e) => {
+				width = clampPanelWidth(startWidth + startX - e.clientX, available);
+			},
+			end: () => {
+				stopResize = null;
+				localStorage.setItem(WIDTH_KEY, String(width));
+			}
+		});
 	}
 
 	function commit(index: number, value: NewCell) {

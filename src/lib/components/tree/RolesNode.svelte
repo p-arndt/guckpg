@@ -9,7 +9,8 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Label } from '#lib/components/ui/label/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
-	import { api, errorMessage, type DatabaseRole } from '#lib/api.js';
+	import { api, errorMessage } from '#lib/api.js';
+	import { Resource } from '#lib/resource.svelte.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { roleEvents } from '#lib/state/roles.svelte.js';
 	import { tabs } from '#lib/state/tabs.svelte.js';
@@ -22,9 +23,8 @@
 		depth
 	}: { connectionId: string; readOnly: boolean; depth: number } = $props();
 	let expanded = $state(false);
-	let loading = $state(false);
-	let roles = $state<DatabaseRole[]>([]);
-	let error = $state<string | null>(null);
+	const roles = new Resource(() => api.listRoles(connectionId));
+	const error = $derived(roles.failed ? errorMessage(roles.error) : null);
 	let dialog = $state(false);
 	let busy = $state(false);
 	let name = $state('');
@@ -34,7 +34,7 @@
 	let createRole = $state(false);
 	let problem = $state<string | null>(null);
 
-	let groups = $derived(groupRoles(roles));
+	let groups = $derived(groupRoles(roles.data ?? []));
 
 	// Reload after a role tab changed or dropped a role.
 	let seenRevision = roleEvents.revision;
@@ -53,16 +53,8 @@
 		return active?.kind === 'role' && active.connectionId === connectionId && active.role === role;
 	}
 
-	async function load() {
-		loading = true;
-		error = null;
-		try {
-			roles = await api.listRoles(connectionId);
-		} catch (e) {
-			error = errorMessage(e);
-		} finally {
-			loading = false;
-		}
+	function load() {
+		void roles.load();
 	}
 	function toggle() {
 		expanded = !expanded;
@@ -99,7 +91,14 @@
 <ContextMenu.Root>
 	<ContextMenu.Trigger>
 		{#snippet child({ props })}
-			<TreeRow {...props} {depth} {expanded} {loading} label="Users & roles" onclick={toggle}>
+			<TreeRow
+				{...props}
+				{depth}
+				{expanded}
+				loading={roles.loading}
+				label="Users & roles"
+				onclick={toggle}
+			>
 				{#snippet icon()}<UsersIcon class="size-3.5" />{/snippet}
 			</TreeRow>
 		{/snippet}
@@ -119,7 +118,7 @@
 		>
 			{error}
 		</p>
-	{:else if !loading && roles.length === 0}
+	{:else if !roles.loading && roles.data?.length === 0}
 		<p
 			class="py-1 text-[13px] text-muted-foreground"
 			style:padding-left="{(depth + 1) * 14 + 26}px"

@@ -159,6 +159,62 @@ export function defaultAiConfig(provider: AiProvider = 'ollama'): AiConfig {
 	};
 }
 
+/** Secrets typed into the settings form; they are never kept after saving. */
+export interface AiCredentialsDraft {
+	apiKey: string;
+	clearKey: boolean;
+	basicUsername: string;
+	basicPassword: string;
+	clearBasic: boolean;
+}
+
+/** Credentials to try when listing models; blank fields fall back to the saved ones. */
+export function modelCredentials(
+	config: AiConfig,
+	draft: AiCredentialsDraft
+): { apiKey?: string; basicAuth?: BasicAuth } {
+	return {
+		apiKey: config.authMode === 'bearer' && draft.apiKey ? draft.apiKey : undefined,
+		basicAuth:
+			config.authMode === 'basic' && (draft.basicUsername || draft.basicPassword)
+				? { username: draft.basicUsername, password: draft.basicPassword }
+				: undefined
+	};
+}
+
+/**
+ * Arguments for `aiApi.saveSettings`. An omitted secret keeps the saved one, an empty one
+ * deletes it; deleting only applies to the endpoint the secret was saved for.
+ */
+export function settingsPayload(
+	config: AiConfig,
+	draft: AiCredentialsDraft,
+	sameEndpoint: boolean
+): { config: AiConfig; apiKey?: string; basicAuth?: BasicAuth } {
+	let apiKey: string | undefined;
+	if (config.authMode === 'bearer')
+		apiKey = draft.clearKey && sameEndpoint ? '' : draft.apiKey || undefined;
+	let basicAuth: BasicAuth | undefined;
+	if (config.authMode === 'basic') {
+		if (draft.clearBasic && sameEndpoint) basicAuth = { username: '', password: '' };
+		else basicAuth = modelCredentials(config, draft).basicAuth;
+	}
+	return {
+		config: { ...config, baseUrl: config.baseUrl.trim(), model: config.model.trim() },
+		apiKey,
+		basicAuth
+	};
+}
+
+/** Rejects with `message` when `promise` takes longer than `ms`. */
+export function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(message)), ms);
+	});
+	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export const aiApi = {
 	getSettings: () => invoke<AiSettings>('ai_get_settings'),
 	saveSettings: (config: AiConfig, apiKey?: string, basicAuth?: BasicAuth) =>

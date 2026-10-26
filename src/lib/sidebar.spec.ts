@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectionConfig } from './api.js';
-import { connectionUrl, moveConnection, renameFolder, sidebarLayout } from './sidebar.js';
+import {
+	connectionUrl,
+	moveConnection,
+	renameFolder,
+	sidebarLayout,
+	treeKeyMove
+} from './sidebar.js';
 
 function conn(id: string, folder: string | null = null, extra: Partial<ConnectionConfig> = {}) {
 	return {
@@ -95,5 +101,50 @@ describe('connectionUrl', () => {
 				conn('a', null, { user: 'a@b', host: '::1', sslMode: 'require', database: 'x' })
 			)
 		).toBe('postgresql://a%40b@[::1]:5432/x?sslmode=require');
+	});
+
+	it('adds the root certificate only when the server is verified', () => {
+		const cert = '/certs/my ca.pem';
+		expect(connectionUrl(conn('a', null, { sslMode: 'verify-full', sslRootCert: cert }))).toBe(
+			'postgresql://postgres@localhost:5432/postgres?sslmode=verify-full&sslrootcert=%2Fcerts%2Fmy%20ca.pem'
+		);
+		expect(connectionUrl(conn('a', null, { sslMode: 'require', sslRootCert: cert }))).toBe(
+			'postgresql://postgres@localhost:5432/postgres?sslmode=require'
+		);
+	});
+});
+
+describe('treeKeyMove', () => {
+	// folder > connection (expanded) > database (collapsed), then a loose connection.
+	const items = [
+		{ level: 1, expanded: true },
+		{ level: 2, expanded: true },
+		{ level: 3, expanded: false },
+		{ level: 1 }
+	];
+
+	it('walks visible rows up and down and jumps to the ends', () => {
+		expect(treeKeyMove(items, 0, 'ArrowDown')).toEqual({ focus: 1 });
+		expect(treeKeyMove(items, 3, 'ArrowDown')).toBeNull();
+		expect(treeKeyMove(items, 0, 'ArrowUp')).toBeNull();
+		expect(treeKeyMove(items, 2, 'ArrowUp')).toEqual({ focus: 1 });
+		expect(treeKeyMove(items, 2, 'Home')).toEqual({ focus: 0 });
+		expect(treeKeyMove(items, 0, 'End')).toEqual({ focus: 3 });
+	});
+
+	it('expands collapsed rows and enters expanded ones', () => {
+		expect(treeKeyMove(items, 2, 'ArrowRight')).toEqual({ toggle: 2 });
+		expect(treeKeyMove(items, 1, 'ArrowRight')).toEqual({ focus: 2 });
+		expect(treeKeyMove(items, 3, 'ArrowRight')).toBeNull();
+	});
+
+	it('collapses expanded rows and otherwise goes to the parent', () => {
+		expect(treeKeyMove(items, 1, 'ArrowLeft')).toEqual({ toggle: 1 });
+		expect(treeKeyMove(items, 2, 'ArrowLeft')).toEqual({ focus: 1 });
+		expect(treeKeyMove(items, 3, 'ArrowLeft')).toBeNull();
+	});
+
+	it('ignores other keys', () => {
+		expect(treeKeyMove(items, 0, 'Enter')).toBeNull();
 	});
 });

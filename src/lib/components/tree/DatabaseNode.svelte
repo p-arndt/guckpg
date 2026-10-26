@@ -1,7 +1,9 @@
 <script lang="ts">
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
-	import { api, errorMessage } from '#lib/api.js';
+	import { errorMessage } from '#lib/api.js';
+	import { Resource } from '#lib/resource.svelte.js';
+	import { catalog } from '#lib/state/catalog.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { tabs } from '#lib/state/tabs.svelte.js';
 	import TreeRow from './TreeRow.svelte';
@@ -18,27 +20,21 @@
 
 	// svelte-ignore state_referenced_locally
 	let expanded = $state(initiallyExpanded);
-	let loading = $state(false);
-	let schemas = $state<string[] | null>(null);
 	let showSystem = $state(false);
-	let error = $state<string | null>(null);
 
-	async function load() {
-		loading = true;
-		error = null;
-		try {
-			schemas = await api.listSchemas(connectionId, database, showSystem);
-		} catch (e) {
-			error = errorMessage(e);
-		} finally {
-			loading = false;
-		}
+	let fresh = false;
+	const schemas = new Resource(() => catalog.schemas(connectionId, database, showSystem, fresh));
+	const error = $derived(schemas.failed ? errorMessage(schemas.error) : null);
+
+	function load(reload = false) {
+		fresh = reload;
+		void schemas.load();
 	}
 
 	$effect(() => {
 		void connections.revision[connectionId];
 		void showSystem;
-		if (expanded) void load();
+		if (expanded) load();
 	});
 </script>
 
@@ -49,7 +45,7 @@
 				{...props}
 				{depth}
 				{expanded}
-				{loading}
+				loading={schemas.loading}
 				label={database}
 				onclick={() => (expanded = !expanded)}
 			>
@@ -61,7 +57,7 @@
 		<ContextMenu.Item onSelect={() => tabs.openQuery(connectionId, database)}>
 			New query
 		</ContextMenu.Item>
-		<ContextMenu.Item onSelect={load}>Refresh</ContextMenu.Item>
+		<ContextMenu.Item onSelect={() => load(true)}>Refresh</ContextMenu.Item>
 		<ContextMenu.CheckboxItem bind:checked={showSystem}
 			>Show system schemas</ContextMenu.CheckboxItem
 		>
@@ -77,7 +73,7 @@
 			{error}
 		</p>
 	{/if}
-	{#each schemas ?? [] as schema (schema)}
+	{#each schemas.data ?? [] as schema (schema)}
 		<SchemaNode
 			{connectionId}
 			{database}

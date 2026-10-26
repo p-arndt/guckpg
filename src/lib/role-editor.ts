@@ -1,3 +1,4 @@
+import { plural } from '#lib/format.js';
 import type {
 	ObjectPrivileges,
 	PrivilegeTarget,
@@ -213,6 +214,51 @@ export function filterObjects(
 	return objects.filter((o) => {
 		if (q && !`${o.schema}.${o.name}`.toLowerCase().includes(q)) return false;
 		if (!onlyGranted) return true;
-		return o.owner || o.effective.length > 0 || (grants[targetKey(targetOf(o))]?.length ?? 0) > 0;
+		return o.owner || o.effective.length > 0 || (grants[objectKey(o)]?.length ?? 0) > 0;
 	});
+}
+
+const objectKeys = new WeakMap<ObjectPrivileges, string>();
+
+/** `targetKey(targetOf(object))`, cached per object because the grant matrix asks per cell. */
+export function objectKey(object: ObjectPrivileges): string {
+	let key = objectKeys.get(object);
+	if (key === undefined) {
+		key = targetKey(targetOf(object));
+		objectKeys.set(object, key);
+	}
+	return key;
+}
+
+/** Who granted a privilege to the role directly, without duplicates. */
+export function grantorsOf(object: ObjectPrivileges, privilege: string): string[] {
+	return [...new Set(object.grants.filter((g) => g.privilege === privilege).map((g) => g.grantor))];
+}
+
+/** Roles `draft` could still join; predefined pg_* roles are useful but numerous, so they go last. */
+export function membershipCandidates(role: RoleDetails, draft: RoleDraft): string[] {
+	return role.otherRoles
+		.filter((r) => !draft.memberOf.includes(r))
+		.sort((a, b) => Number(a.startsWith('pg_')) - Number(b.startsWith('pg_')));
+}
+
+/** One-line description of a role for the header. */
+export function roleSummary(role: RoleDetails): string {
+	const parts = [role.canLogin ? 'Can log in' : 'Cannot log in'];
+	if (role.memberOf.length) parts.push(`member of ${role.memberOf.map((m) => m.role).join(', ')}`);
+	if (role.members.length) parts.push(plural(role.members.length, 'member'));
+	if (role.validUntil) parts.push(`expires ${role.validUntil}`);
+	return parts.join(' · ');
+}
+
+/**
+ * Issues tokens for overlapping async loads; only the most recent one may apply its result,
+ * so a slow response for a previously selected database cannot overwrite the current one.
+ */
+export function latestRequest(): () => () => boolean {
+	let current = 0;
+	return () => {
+		const token = ++current;
+		return () => token === current;
+	};
 }

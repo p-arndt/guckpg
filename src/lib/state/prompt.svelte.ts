@@ -1,3 +1,5 @@
+import { PendingRequest } from './pending.svelte.js';
+
 export interface PromptRequest {
 	title: string;
 	label: string;
@@ -5,25 +7,17 @@ export interface PromptRequest {
 	confirmLabel?: string;
 }
 
-interface Pending extends PromptRequest {
-	resolve: (value: string | null) => void;
-}
-
 /** A promise-based prompt() backed by the app's own dialog; null means cancelled. */
-class Prompt {
-	pending = $state<Pending | null>(null);
-
-	ask(request: PromptRequest): Promise<string | null> {
-		this.pending?.resolve(null);
-		return new Promise((resolve) => (this.pending = { ...request, resolve }));
+class Prompt extends PendingRequest<PromptRequest, string | null> {
+	constructor() {
+		super(null);
 	}
 
-	answer(value: string | null) {
-		const p = this.pending;
-		this.pending = null;
-		const trimmed = value?.trim();
-		p?.resolve(trimmed ? trimmed : null);
+	/** Blank answers count as cancelled. */
+	override answer(value: string | null) {
+		super.answer(value?.trim() || null);
 	}
 }
 
+export { Prompt };
 export const prompt = new Prompt();

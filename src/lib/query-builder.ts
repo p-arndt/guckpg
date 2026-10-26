@@ -1,4 +1,7 @@
 import type { ForeignKey } from './api.js';
+import { ident, qualified, valueLiteral as literal } from './sql-quote.js';
+
+export { ident, literal };
 
 export const JOIN_TYPES = ['INNER', 'LEFT', 'RIGHT', 'FULL'] as const;
 export type JoinType = (typeof JOIN_TYPES)[number];
@@ -99,34 +102,8 @@ export function newId(prefix: string): string {
 	return `${prefix}${counter}`;
 }
 
-const RESERVED = new Set(
-	`all analyse analyze and any array as asc asymmetric authorization binary both case cast check
-	collate collation column concurrently constraint create cross current_catalog current_date
-	current_role current_schema current_time current_timestamp current_user default deferrable desc
-	distinct do else end except false fetch for foreign freeze from full grant group having ilike in
-	initially inner intersect into is isnull join lateral leading left like limit localtime
-	localtimestamp natural not notnull null offset on only or order outer overlaps placing primary
-	references returning right select session_user similar some symmetric system_user table
-	tablesample then to trailing true union unique user using variadic verbose when where window with`.split(
-		/\s+/
-	)
-);
-
-/** An identifier as written by hand: bare when Postgres would read it back the same. */
-export function ident(name: string): string {
-	if (/^[a-z_][a-z0-9_$]*$/.test(name) && !RESERVED.has(name)) return name;
-	return `"${name.replaceAll('"', '""')}"`;
-}
-
-/** Numbers stay bare; everything else is a string literal Postgres casts to the column type. */
-export function literal(value: string): string {
-	if (/^-?\d+(\.\d+)?$/.test(value.trim())) return value.trim();
-	return `'${value.replaceAll("'", "''")}'`;
-}
-
 function tableSql(table: BuilderTable): string {
-	const name =
-		table.schema === 'public' ? ident(table.name) : `${ident(table.schema)}.${ident(table.name)}`;
+	const name = qualified(table.schema, table.name);
 	return table.alias === table.name ? name : `${name} AS ${ident(table.alias)}`;
 }
 

@@ -3,8 +3,10 @@
 	import LockIcon from '@lucide/svelte/icons/lock';
 	import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
 	import { toast } from 'svelte-sonner';
-	import { api, errorMessage, type ConnectionConfig } from '#lib/api.js';
+	import { errorMessage, type ConnectionConfig } from '#lib/api.js';
+	import { Resource } from '#lib/resource.svelte.js';
 	import { connectionUrl } from '#lib/sidebar.js';
+	import { catalog } from '#lib/state/catalog.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { sidebar } from '#lib/state/sidebar.svelte.js';
 	import { tabs } from '#lib/state/tabs.svelte.js';
@@ -36,27 +38,26 @@
 		onNewFolder
 	}: Props = $props();
 
-	let databases = $state<string[] | null>(null);
+	const databases = new Resource(() => catalog.databases(connection.id));
 	let dropTarget = $state(false);
 
 	const status = $derived(connections.status[connection.id] ?? 'idle');
 	const info = $derived(connections.info[connection.id]);
 	const expanded = $derived(sidebar.isOpen(connection.id));
 
-	async function loadDatabases() {
-		try {
-			databases = await api.listDatabases(connection.id);
-		} catch (e) {
+	async function loadDatabases(): Promise<boolean> {
+		if (await databases.load()) return true;
+		if (databases.failed) {
 			sidebar.setOpen(connection.id, false);
-			toast.error(`${connection.name}: ${errorMessage(e)}`);
+			toast.error(`${connection.name}: ${errorMessage(databases.error)}`);
 		}
+		return false;
 	}
 
 	async function open() {
 		try {
 			if (status !== 'connected') await connections.connect(connection.id);
-			await loadDatabases();
-			sidebar.setOpen(connection.id, true);
+			if (await loadDatabases()) sidebar.setOpen(connection.id, true);
 		} catch (e) {
 			sidebar.setOpen(connection.id, false);
 			toast.error(`${connection.name}: ${errorMessage(e)}`);
@@ -65,7 +66,9 @@
 
 	// Opened from elsewhere (command palette) or remounted in another folder.
 	$effect(() => {
-		if (expanded && status === 'connected' && databases === null) void loadDatabases();
+		if (expanded && status === 'connected' && databases.data === null && !databases.loading) {
+			if (!databases.failed) void loadDatabases();
+		}
 	});
 
 	async function toggle() {
@@ -74,10 +77,15 @@
 	}
 
 	async function disconnect() {
-		tabs.closeForConnection(connection.id);
-		await connections.disconnect(connection.id);
+		if (!(await tabs.requestCloseForConnection(connection.id))) return;
+		try {
+			await connections.disconnect(connection.id);
+		} catch (e) {
+			toast.error(`${connection.name}: ${errorMessage(e)}`);
+			return;
+		}
 		sidebar.setOpen(connection.id, false);
-		databases = null;
+		databases.reset();
 	}
 
 	function refresh() {
@@ -114,8 +122,8 @@
 
 	// The default database first: it is where people usually work.
 	const ordered = $derived([
-		...(databases ?? []).filter((d) => d === connection.database),
-		...(databases ?? []).filter((d) => d !== connection.database)
+		...(databases.data ?? []).filter((d) => d === connection.database),
+		...(databases.data ?? []).filter((d) => d !== connection.database)
 	]);
 </script>
 

@@ -8,7 +8,7 @@ import {
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
-class Connections {
+export class Connections {
 	list = $state<ConnectionConfig[]>([]);
 	status = $state<Record<string, ConnectionStatus>>({});
 	info = $state<Record<string, ServerInfo>>({});
@@ -40,6 +40,8 @@ class Connections {
 		await api.disconnect(id);
 		this.status[id] = 'idle';
 		delete this.info[id];
+		// The catalog caches by revision; a later reconnect must not see old lists.
+		this.refresh(id);
 	}
 
 	async save(config: ConnectionConfig, secrets: Secrets): Promise<ConnectionConfig> {
@@ -65,6 +67,8 @@ class Connections {
 
 	/** Apply a new sidebar order and folders; shows it before the backend answers. */
 	async arrange(placements: Placement[]) {
+		// A lookup local to this call; nothing renders from it.
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity
 		const byId = new Map(this.list.map((c) => [c.id, c]));
 		this.list = placements.flatMap((p) => {
 			const c = byId.get(p.id);

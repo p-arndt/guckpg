@@ -9,7 +9,11 @@ import {
 	completedActivityCount,
 	toolOutcome,
 	approvalOutcome,
-	thinkingPreview
+	thinkingPreview,
+	modelCredentials,
+	settingsPayload,
+	withTimeout,
+	type AiCredentialsDraft
 } from './ai';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -209,5 +213,78 @@ describe('completed activity count', () => {
 				}
 			])
 		).toBe(2);
+	});
+});
+
+describe('settings payload', () => {
+	const blank: AiCredentialsDraft = {
+		apiKey: '',
+		clearKey: false,
+		basicUsername: '',
+		basicPassword: '',
+		clearBasic: false
+	};
+	const bearer = { ...defaultAiConfig('openaiResponses'), baseUrl: ' https://x/v1 ', model: ' m ' };
+	const basic = { ...bearer, authMode: 'basic' as const };
+
+	it('trims the endpoint and model', () => {
+		expect(settingsPayload(bearer, blank, true).config).toMatchObject({
+			baseUrl: 'https://x/v1',
+			model: 'm'
+		});
+	});
+
+	it('keeps, replaces or deletes the API key', () => {
+		expect(settingsPayload(bearer, blank, true).apiKey).toBeUndefined();
+		expect(settingsPayload(bearer, { ...blank, apiKey: 'k' }, true).apiKey).toBe('k');
+		expect(settingsPayload(bearer, { ...blank, apiKey: 'k', clearKey: true }, true).apiKey).toBe(
+			''
+		);
+		// A delete ticked for another endpoint must not wipe the key of the new one.
+		expect(settingsPayload(bearer, { ...blank, apiKey: 'k', clearKey: true }, false).apiKey).toBe(
+			'k'
+		);
+		expect(settingsPayload(basic, { ...blank, apiKey: 'k' }, true).apiKey).toBeUndefined();
+	});
+
+	it('keeps, replaces or deletes Basic Auth', () => {
+		expect(settingsPayload(basic, blank, true).basicAuth).toBeUndefined();
+		expect(settingsPayload(basic, { ...blank, basicUsername: 'u' }, true).basicAuth).toEqual({
+			username: 'u',
+			password: ''
+		});
+		expect(
+			settingsPayload(basic, { ...blank, basicUsername: 'u', clearBasic: true }, true).basicAuth
+		).toEqual({ username: '', password: '' });
+		expect(settingsPayload(basic, { ...blank, clearBasic: true }, false).basicAuth).toBeUndefined();
+		expect(
+			settingsPayload(bearer, { ...blank, basicUsername: 'u' }, true).basicAuth
+		).toBeUndefined();
+	});
+
+	it('sends only the credentials of the chosen auth mode when listing models', () => {
+		const draft = { ...blank, apiKey: 'k', basicPassword: 'p' };
+		expect(modelCredentials(bearer, draft)).toEqual({ apiKey: 'k', basicAuth: undefined });
+		expect(modelCredentials(basic, draft)).toEqual({
+			apiKey: undefined,
+			basicAuth: { username: '', password: 'p' }
+		});
+	});
+});
+
+describe('withTimeout', () => {
+	it('passes the result through', async () => {
+		await expect(withTimeout(Promise.resolve(1), 1000, 'slow')).resolves.toBe(1);
+	});
+
+	it('rejects with the message when too slow', async () => {
+		vi.useFakeTimers();
+		try {
+			const result = withTimeout(new Promise(() => {}), 1000, 'slow');
+			vi.advanceTimersByTime(1000);
+			await expect(result).rejects.toThrow('slow');
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

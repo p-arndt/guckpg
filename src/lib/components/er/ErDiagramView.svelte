@@ -21,6 +21,7 @@
 	import * as Select from '#lib/components/ui/select/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { api, errorMessage, type Diagram } from '#lib/api.js';
+	import { catalog } from '#lib/state/catalog.js';
 	import {
 		COLUMN_MODES,
 		COLUMN_MODE_KEY,
@@ -196,7 +197,7 @@
 
 	async function loadSchemas() {
 		try {
-			schemas = await api.listSchemas(tab.connectionId, tab.database);
+			schemas = await catalog.schemas(tab.connectionId, tab.database, false, true);
 		} catch {
 			schemas = [];
 		}

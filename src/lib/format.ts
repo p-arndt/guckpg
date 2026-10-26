@@ -19,3 +19,8 @@ export function formatEstimate(n: number | null): string {
 	if (n < 1_000_000) return `~${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
 	return `~${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
 }
+
+/** `1 row`, `3 rows`; `pluralWord` for irregular plurals. */
+export function plural(n: number, word: string, pluralWord = `${word}s`): string {
+	return `${formatCount(n)} ${n === 1 ? word : pluralWord}`;
+}

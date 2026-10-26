@@ -4,6 +4,7 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { api, errorMessage } from '#lib/api.js';
 	import { connections } from '#lib/state/connections.svelte.js';
+	import { catalog } from '#lib/state/catalog.js';
 	import {
 		compareSchemas,
 		type SchemaDifference,
@@ -33,10 +34,10 @@
 		}
 	});
 	async function snapshot(id: string, database: string, schema: string): Promise<SchemaSnapshot> {
-		const schemas = await api.listSchemas(id, database);
+		const schemas = await catalog.schemas(id, database);
 		if (!schemas.includes(schema))
 			throw new Error(`Schema ${schema} was not found in ${database}.`);
-		const relations = await api.listRelations(id, database, schema);
+		const relations = await catalog.relations(id, database, schema, true);
 		return {
 			relations: await Promise.all(
 				relations.map(async (relation) => ({

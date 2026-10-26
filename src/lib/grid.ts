@@ -1,5 +1,10 @@
 export type Cell = string | null;
 
+export interface Sort {
+	column: string;
+	dir: 'asc' | 'desc';
+}
+
 const CHAR_PX = 7.4;
 const PADDING_PX = 24;
 export const MIN_COL_PX = 60;
@@ -44,10 +49,15 @@ export function isNumeric(v: Cell): boolean {
 	return v !== null && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(v);
 }
 
-/** Tab-separated text that pastes into spreadsheets; NULL becomes empty. */
-export function toTsv(columns: string[] | null, rows: Cell[][]): string {
-	const escape = (v: Cell) => {
-		if (v === null) return '';
+/**
+ * Tab-separated text that pastes into spreadsheets. NULL and DEFAULT (undefined)
+ * become an empty field and an empty string becomes `""`, so `fromTsv` can tell
+ * them apart again.
+ */
+export function toTsv(columns: string[] | null, rows: (Cell | undefined)[][]): string {
+	const escape = (v: Cell | undefined) => {
+		if (v === null || v === undefined) return '';
+		if (v === '') return '""';
 		return /[\t\n\r"]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v;
 	};
 	const lines = rows.map((r) => r.map(escape).join('\t'));
@@ -68,17 +78,24 @@ export function visibleRange(
 	return { start: Math.min(start, end), end };
 }
 
-/**
- * Parse clipboard text from a spreadsheet or from `toTsv`: tabs between
- * cells, newlines between rows, double quotes around cells with specials.
- */
-export function parseTsv(text: string): string[][] {
-	const rows: string[][] = [];
-	let row: string[] = [];
+interface Field {
+	text: string;
+	quoted: boolean;
+}
+
+function parseFields(text: string): Field[][] {
+	const rows: Field[][] = [];
+	let row: Field[] = [];
 	let cell = '';
-	let i = 0;
+	let wasQuoted = false;
 	let quoted = false;
+	let i = 0;
 	const input = text.replace(/\r\n?/g, '\n').replace(/\n$/, '');
+	const endCell = () => {
+		row.push({ text: cell, quoted: wasQuoted });
+		cell = '';
+		wasQuoted = false;
+	};
 	while (i < input.length) {
 		const c = input[i];
 		if (quoted) {
@@ -89,35 +106,98 @@ export function parseTsv(text: string): string[][] {
 			}
 			if (c === '"') quoted = false;
 			else cell += c;
-		} else if (c === '"' && cell === '') {
+		} else if (c === '"' && cell === '' && !wasQuoted) {
 			quoted = true;
+			wasQuoted = true;
 		} else if (c === '\t') {
-			row.push(cell);
-			cell = '';
+			endCell();
 		} else if (c === '\n') {
-			row.push(cell);
+			endCell();
 			rows.push(row);
 			row = [];
-			cell = '';
 		} else cell += c;
 		i++;
 	}
-	row.push(cell);
+	endCell();
 	rows.push(row);
 	return rows;
 }
 
 /**
+ * Parse clipboard text from a spreadsheet or from `toTsv`: tabs between
+ * cells, newlines between rows, double quotes around cells with specials.
+ */
+export function parseTsv(text: string): string[][] {
+	return parseFields(text).map((row) => row.map((f) => f.text));
+}
+
+/**
+ * Like `parseTsv`, but an empty unquoted field is NULL: that is what `toTsv`
+ * writes for NULL and what a spreadsheet gives for an empty cell. `""` stays
+ * an empty string.
+ */
+export function fromTsv(text: string): Cell[][] {
+	return parseFields(text).map((row) =>
+		row.map((f) => (f.text === '' && !f.quoted ? null : f.text))
+	);
+}
+
+/**
+ * The value a pasted cell sets. A NULL pasted into a cell of a new row means
+ * "not given" (undefined, the edits store's DEFAULT), so the column default applies.
+ */
+export function pastedValue(value: Cell, newRow: boolean): Cell | undefined {
+	return value === null && newRow ? undefined : value;
+}
+
+/** The next sort after clicking a column header: ascending, descending, off. */
+export function cycleSort(current: Sort | null, column: string): Sort | null {
+	if (current?.column !== column) return { column, dir: 'asc' };
+	return current.dir === 'asc' ? { column, dir: 'desc' } : null;
+}
+
+const NUMBER = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i;
+
+/** A number as sign, significant digits and the position of the decimal point. */
+interface Decimal {
+	sign: -1 | 0 | 1;
+	digits: string;
+	point: number;
+}
+
+/** Exact, so bigint and numeric values beyond 2^53 keep their order. */
+function parseDecimal(v: string): Decimal | null {
+	const m = NUMBER.exec(v);
+	if (!m) return null;
+	const [, minus, int, frac = '', exp = '0'] = m;
+	let digits = int + frac;
+	let point = int.length + Number(exp);
+	const lead = digits.length - digits.replace(/^0+/, '').length;
+	digits = digits.slice(lead).replace(/0+$/, '');
+	point -= lead;
+	if (!digits) return { sign: 0, digits: '', point: 0 };
+	return { sign: minus ? -1 : 1, digits, point };
+}
+
+function compareDecimal(x: Decimal, y: Decimal): number {
+	if (x.sign !== y.sign) return x.sign - y.sign;
+	if (x.sign === 0) return 0;
+	let magnitude = x.point - y.point;
+	if (magnitude === 0) magnitude = x.digits < y.digits ? -1 : x.digits > y.digits ? 1 : 0;
+	return Math.sign(magnitude) * x.sign;
+}
+
+/**
  * Row indexes sorted by one column, NULLs last in both directions. Numbers
- * compare numerically when both sides are numeric. Keys are computed once
- * per row: testing and parsing inside the comparator would run them
- * n·log(n) times, which is slow for 100k rows.
+ * compare exactly and come before text, which keeps the order consistent when
+ * a column mixes both. Keys are computed once per row: testing and parsing
+ * inside the comparator would run them n·log(n) times, which is slow for 100k rows.
  */
 export function sortOrder(rows: Cell[][], col: number, dir: 'asc' | 'desc'): number[] {
 	const sign = dir === 'asc' ? 1 : -1;
 	const keys = rows.map((r) => {
 		const v = r[col];
-		return { v, n: isNumeric(v) ? Number(v) : NaN };
+		return { v, n: v === null ? null : parseDecimal(v) };
 	});
 	const indexes = rows.map((_, i) => i);
 	return indexes.sort((a, b) => {
@@ -126,7 +206,9 @@ export function sortOrder(rows: Cell[][], col: number, dir: 'asc' | 'desc'): num
 		if (x.v === y.v) return 0;
 		if (x.v === null) return 1;
 		if (y.v === null) return -1;
-		if (!Number.isNaN(x.n) && !Number.isNaN(y.n)) return (x.n - y.n) * sign;
+		if (x.n && y.n) return compareDecimal(x.n, y.n) * sign;
+		if (x.n) return -sign;
+		if (y.n) return sign;
 		return x.v.localeCompare(y.v) * sign;
 	});
 }

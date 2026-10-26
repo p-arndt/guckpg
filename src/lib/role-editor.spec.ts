@@ -3,8 +3,13 @@ import type { ObjectPrivileges, RoleDetails } from '#lib/api.js';
 import {
 	draftOf,
 	filterObjects,
+	grantorsOf,
 	grantsOf,
+	latestRequest,
+	membershipCandidates,
+	objectKey,
 	planChanges,
+	roleSummary,
 	targetKey,
 	toggleColumn,
 	toggleGrant
@@ -34,6 +39,7 @@ const table = (name: string, granted: string[] = [], effective = granted): Objec
 	kind: 'table',
 	owner: false,
 	granted,
+	grants: granted.map((privilege) => ({ privilege, grantor: 'postgres' })),
 	effective
 });
 
@@ -161,5 +167,72 @@ describe('filterObjects', () => {
 	it('hides objects the role cannot touch', () => {
 		const grants = { ...grantsOf(objects), [ordersKey]: [] };
 		expect(filterObjects(objects, '', true, grants).map((o) => o.name)).toEqual(['users', 'audit']);
+	});
+});
+
+describe('objectKey', () => {
+	it('matches targetKey and is stable per object', () => {
+		const users = table('users');
+		expect(objectKey(users)).toBe(usersKey);
+		expect(objectKey(users)).toBe(objectKey(users));
+	});
+});
+
+describe('grantorsOf', () => {
+	it('lists each grantor of a privilege once', () => {
+		const users: ObjectPrivileges = {
+			...table('users', ['SELECT', 'UPDATE']),
+			grants: [
+				{ privilege: 'SELECT', grantor: 'postgres' },
+				{ privilege: 'SELECT', grantor: 'admin' },
+				{ privilege: 'SELECT', grantor: 'admin' },
+				{ privilege: 'UPDATE', grantor: 'postgres' }
+			]
+		};
+		expect(grantorsOf(users, 'SELECT')).toEqual(['postgres', 'admin']);
+		expect(grantorsOf(users, 'DELETE')).toEqual([]);
+	});
+});
+
+describe('membershipCandidates', () => {
+	it('offers roles not yet joined, predefined pg_* roles last', () => {
+		const details = { ...role, otherRoles: ['pg_read_all_data', 'readers', 'writers', 'admins'] };
+		expect(membershipCandidates(details, draftOf(details))).toEqual([
+			'writers',
+			'admins',
+			'pg_read_all_data'
+		]);
+	});
+});
+
+describe('roleSummary', () => {
+	it('describes login, memberships, members and expiry', () => {
+		expect(roleSummary(role)).toBe('Can log in · member of readers');
+		expect(
+			roleSummary({
+				...role,
+				canLogin: false,
+				memberOf: [],
+				members: [
+					{ role: 'a', admin: false },
+					{ role: 'b', admin: true }
+				],
+				validUntil: '2027-01-01'
+			})
+		).toBe('Cannot log in · 2 members · expires 2027-01-01');
+		expect(roleSummary({ ...role, memberOf: [], members: [{ role: 'a', admin: false }] })).toBe(
+			'Can log in · 1 member'
+		);
+	});
+});
+
+describe('latestRequest', () => {
+	it('only lets the newest request apply its result', () => {
+		const begin = latestRequest();
+		const first = begin();
+		expect(first()).toBe(true);
+		const second = begin();
+		expect(first()).toBe(false);
+		expect(second()).toBe(true);
 	});
 });

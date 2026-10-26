@@ -15,7 +15,8 @@
 	import { setMode, userPrefersMode } from 'mode-watcher';
 	import { toast } from 'svelte-sonner';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
-	import { api, errorMessage, type CompletionTable } from '#lib/api.js';
+	import { errorMessage, type CompletionTable } from '#lib/api.js';
+	import { catalog } from '#lib/state/catalog.js';
 	import { fuzzyFilter } from '#lib/fuzzy.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { sidebar } from '#lib/state/sidebar.svelte.js';
@@ -79,16 +80,22 @@
 		if (!open) return;
 		const wanted = targets;
 		untrack(() => {
+			// Keys carry the tree revision: lists of refreshed or disconnected targets are dead.
+			const live = new Set(wanted.map((t) => t.key));
+			for (const key of Object.keys(tables)) if (!live.has(key)) delete tables[key];
 			for (const t of wanted) {
 				if (tables[t.key] || fetching.has(t.key)) continue;
 				fetching.add(t.key);
 				loading++;
-				api
+				catalog
 					.completionTables(t.connectionId, t.database)
 					.then(
-						(list) => (tables[t.key] = list),
-						() => (tables[t.key] = [])
+						(list) => list,
+						() => []
 					)
+					.then((list) => {
+						if (targets.some((x) => x.key === t.key)) tables[t.key] = list;
+					})
 					.finally(() => {
 						fetching.delete(t.key);
 						loading--;

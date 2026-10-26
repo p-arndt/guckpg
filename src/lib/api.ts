@@ -1,7 +1,7 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { hostKeyPrompt } from './state/host-key.svelte.js';
 
-export type SslMode = 'disable' | 'prefer' | 'require' | 'verify-full';
+export type SslMode = 'disable' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
 
 export type SshAuth =
 	{ method: 'password' } | { method: 'key'; keyPath: string } | { method: 'agent' };
@@ -21,6 +21,8 @@ export interface ConnectionConfig {
 	user: string;
 	database: string;
 	sslMode: SslMode;
+	/** CA file for verify-ca/verify-full; unset uses the system roots. */
+	sslRootCert?: string | null;
 	readOnly: boolean;
 	color: string | null;
 	ssh: SshConfig | null;
@@ -67,6 +69,11 @@ export interface RoleMembership {
 export type PrivilegeKind =
 	'database' | 'schema' | 'table' | 'partitioned' | 'view' | 'materialized' | 'foreign' | 'other';
 
+export interface PrivilegeGrant {
+	privilege: string;
+	grantor: string;
+}
+
 export interface ObjectPrivileges {
 	schema: string | null;
 	name: string;
@@ -74,6 +81,8 @@ export interface ObjectPrivileges {
 	owner: boolean;
 	/** Granted to the role directly. */
 	granted: string[];
+	/** Who granted each entry of `granted`; a REVOKE leaves other grantors' grants in place. */
+	grants: PrivilegeGrant[];
 	/** What the role can do, including ownership, PUBLIC and memberships. */
 	effective: string[];
 }
@@ -264,6 +273,11 @@ export function errorMessage(e: unknown): string {
 	}
 	if (e instanceof Error) return e.message;
 	return String(e);
+}
+
+/** Any thrown value as an AppError, so views can show it the same way. */
+export function toAppError(e: unknown): AppError {
+	return isAppError(e) ? e : { kind: 'message', message: errorMessage(e) };
 }
 
 /**

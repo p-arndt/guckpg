@@ -112,12 +112,12 @@ describe('Tabs', () => {
 		expect(tabs.items).toHaveLength(0);
 	});
 
-	it('closes all tabs of a connection', () => {
+	it('closes all tabs of a connection', async () => {
 		const tabs = new Tabs();
 		tabs.openQuery('c1', 'db');
 		tabs.openTable('c2', 'db', 'public', 't');
 		tabs.openQuery('c1', 'db');
-		tabs.closeForConnection('c1');
+		await tabs.requestCloseForConnection('c1');
 		expect(tabs.items.map((t) => t.connectionId)).toEqual(['c2']);
 	});
 
@@ -237,10 +237,10 @@ describe('Tabs', () => {
 		expect(tabs.reopenClosed()).toBe(false);
 	});
 
-	it('does not remember tabs closed with their connection', () => {
+	it('does not remember tabs closed with their connection', async () => {
 		const tabs = new Tabs();
 		tabs.openQuery('c1', 'db');
-		tabs.closeForConnection('c1');
+		await tabs.requestCloseForConnection('c1');
 		expect(tabs.closed).toEqual([]);
 	});
 

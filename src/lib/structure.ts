@@ -1,4 +1,5 @@
 import { invoke } from './api.js';
+import { quoteIdent, valueLiteral } from './sql-quote.js';
 
 export interface StructureColumn {
 	name: string;
@@ -8,6 +9,8 @@ export interface StructureColumn {
 	identity: '' | 'always' | 'byDefault';
 	comment: string | null;
 	generated: boolean;
+	/** Draft only, never loaded: how existing values convert when dataType changes. */
+	using?: string | null;
 }
 export interface StructureConstraint {
 	name: string;
@@ -38,7 +41,10 @@ export interface TableStructure {
 	constraints: StructureConstraint[];
 	indexes: StructureIndex[];
 }
-export type ColumnInput = Omit<StructureColumn, 'generated'>;
+export type ColumnInput = Omit<StructureColumn, 'generated' | 'using'> & {
+	/** USING expression for an alterColumn that changes dataType; ignored otherwise. */
+	using?: string | null;
+};
 export type ConstraintInput = Omit<StructureConstraint, 'definition' | 'kind'> & {
 	kind: Exclude<StructureConstraint['kind'], 'other'>;
 };
@@ -92,6 +98,12 @@ export const indexInput = ({ name, columns, unique, method }: StructureIndex): I
 	unique,
 	method
 });
+/** An altered column, with its USING expression only when the type actually changes. */
+export function alterColumnInput(old: StructureColumn, column: StructureColumn): ColumnInput {
+	const input = columnInput(column);
+	const using = column.using?.trim();
+	return using && column.dataType !== old.dataType ? { ...input, using } : input;
+}
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 export function renameDraftColumn(
 	draft: TableStructure,
@@ -187,7 +199,7 @@ export function buildRequest(
 			const old = original.columns.find((c) => c.name === origin);
 			if (!old) changes.push({ op: 'addColumn', column: columnInput(col) });
 			else if (!equal(columnInput(old), columnInput(col)))
-				changes.push({ op: 'alterColumn', name: old.name, column: columnInput(col) });
+				changes.push({ op: 'alterColumn', name: old.name, column: alterColumnInput(old, col) });
 		}
 	}
 	for (const c of draft.constraints)
@@ -396,10 +408,7 @@ export function toggleForeignKeyColumn(
 export function checkExpression(column: string, operator: string, value: string): string | null {
 	const trimmed = value.trim();
 	if (!column || !trimmed) return null;
-	const literal = /^-?\d+(?:\.\d+)?$/.test(trimmed)
-		? trimmed
-		: `'${trimmed.replaceAll("'", "''")}'`;
-	return `"${column.replaceAll('"', '""')}" ${operator} ${literal}`;
+	return `${quoteIdent(column)} ${operator} ${valueLiteral(trimmed)}`;
 }
 
 /** Pairs each local column with the referenced column of the same name, else an unused key column. */
@@ -415,4 +424,261 @@ export function matchReferences(
 		if (match) used.push(match.name);
 		return match?.name ?? '';
 	});
+}
+
+export const COLUMN_TYPES = [
+	'text',
+	'varchar(255)',
+	'integer',
+	'bigint',
+	'smallint',
+	'numeric',
+	'numeric(12,2)',
+	'real',
+	'double precision',
+	'boolean',
+	'uuid',
+	'date',
+	'time',
+	'timestamp',
+	'timestamp with time zone',
+	'interval',
+	'jsonb',
+	'json',
+	'bytea',
+	'inet',
+	'text[]'
+];
+export const IDENTITY_LABELS = { '': 'None', always: 'Always', byDefault: 'By default' } as const;
+export const DESIGNER_SECTIONS = ['columns', 'constraints', 'indexes'] as const;
+export type DesignerSection = (typeof DESIGNER_SECTIONS)[number];
+export const FK_ACTION_KEYS = ['onUpdate', 'onDelete'] as const;
+export const NEW_CONSTRAINT_KINDS = ['primaryKey', 'unique', 'foreignKey', 'check'] as const;
+export type NewConstraintKind = (typeof NEW_CONSTRAINT_KINDS)[number];
+export const REFERENTIAL_ACTIONS = ['NO ACTION', 'RESTRICT', 'CASCADE', 'SET NULL', 'SET DEFAULT'];
+export const INDEX_METHODS = ['btree', 'hash', 'gin', 'gist', 'brin', 'spgist'];
+
+/** Items whose name still follows their columns until the user types one. */
+export type AutoNamed = Pick<WeakSet<object>, 'has'>;
+export type ReferenceOption = { name: string; primaryKey?: boolean };
+
+/** Pending change count; an untouched create form has nothing to apply yet. */
+export function draftChangeCount(
+	draft: TableStructure,
+	request: StructureRequest,
+	table: string | undefined,
+	reloadRequired: boolean
+): number {
+	if (reloadRequired) return 0;
+	const touched =
+		table ||
+		draft.name ||
+		draft.comment ||
+		draft.columns.length ||
+		draft.constraints.length ||
+		draft.indexes.length;
+	return touched ? request.changes.length : 0;
+}
+
+/** Why the designer cannot be edited right now, or '' when it can. */
+export function designerReadOnlyReason(state: {
+	reloadRequired: boolean;
+	/** The connection's flag; anything but an explicit false counts as read-only. */
+	readOnly: boolean | undefined;
+	table: string | undefined;
+	original: TableStructure | null;
+}): string {
+	if (state.reloadRequired) return 'Reload to keep editing.';
+	if (state.readOnly !== false) return 'Read-only connection.';
+	if (state.table && !state.original) return 'The structure could not be loaded.';
+	if (state.original && state.original.kind !== 'r') return 'Only plain tables can be edited here.';
+	return '';
+}
+
+const nameKind = (kind: StructureConstraint['kind']) => (kind === 'other' ? 'check' : kind);
+
+/** Renames the draft table, following self references and auto-named constraints and indexes. */
+export function renameDraftTable(
+	draft: TableStructure,
+	schema: string,
+	name: string,
+	autoNamed: AutoNamed
+): void {
+	const old = draft.name;
+	draft.name = name;
+	for (const c of draft.constraints) {
+		if ((c.refSchema ?? schema) === schema && c.refTable === old) c.refTable = name;
+		if (autoNamed.has(c)) c.name = suggestName(draft, nameKind(c.kind), c.columns, c);
+	}
+	for (const idx of draft.indexes)
+		if (autoNamed.has(idx)) idx.name = suggestName(draft, 'index', idx.columns, idx);
+}
+
+/** Appends an empty nullable text column and returns it. */
+export function addDraftColumn(
+	draft: TableStructure,
+	columnNames: (string | null)[]
+): StructureColumn {
+	columnNames.push(null);
+	draft.columns.push({
+		name: '',
+		dataType: 'text',
+		nullable: true,
+		default: null,
+		identity: '',
+		comment: null,
+		generated: false
+	});
+	return draft.columns.at(-1)!;
+}
+
+/**
+ * Removes a column and takes it out of every constraint and index; keys and indexes left
+ * without columns go too, checks stay because their expression is free text.
+ */
+export function removeDraftColumn(
+	draft: TableStructure,
+	columnNames: (string | null)[],
+	index: number
+): void {
+	const name = draft.columns[index].name;
+	draft.columns.splice(index, 1);
+	columnNames.splice(index, 1);
+	for (const c of draft.constraints) {
+		const at = c.columns.indexOf(name);
+		if (at < 0) continue;
+		c.columns = c.columns.filter((_, n) => n !== at);
+		if (c.kind === 'foreignKey') c.refColumns = c.refColumns.filter((_, n) => n !== at);
+	}
+	draft.constraints = draft.constraints.filter(
+		(c) => c.kind === 'other' || c.kind === 'check' || c.columns.length
+	);
+	for (const idx of draft.indexes) idx.columns = idx.columns.filter((n) => n !== name);
+	draft.indexes = draft.indexes.filter((idx) => idx.managed || idx.columns.length);
+}
+
+/** Appends an empty constraint of `kind` with a suggested name and returns it. */
+export function addDraftConstraint(
+	draft: TableStructure,
+	schema: string,
+	kind: NewConstraintKind
+): StructureConstraint {
+	draft.constraints.push({
+		name: suggestName(draft, kind, []),
+		kind,
+		columns: [],
+		refSchema: kind === 'foreignKey' ? schema : null,
+		refTable: null,
+		refColumns: [],
+		onUpdate: null,
+		onDelete: null,
+		expression: null,
+		definition: ''
+	});
+	return draft.constraints.at(-1)!;
+}
+
+/** Appends an empty btree index with a suggested name and returns it. */
+export function addDraftIndex(draft: TableStructure): StructureIndex {
+	draft.indexes.push({
+		name: suggestName(draft, 'index', []),
+		columns: [],
+		unique: false,
+		method: 'btree',
+		definition: '',
+		managed: false
+	});
+	return draft.indexes.at(-1)!;
+}
+
+const toggled = (columns: string[], column: string) =>
+	columns.includes(column) ? columns.filter((n) => n !== column) : [...columns, column];
+
+/** Toggles a column of a constraint; primary key columns become not null. */
+export function toggleConstraintColumn(
+	draft: TableStructure,
+	constraint: StructureConstraint,
+	column: string,
+	options: ReferenceOption[],
+	autoNamed: AutoNamed
+): void {
+	if (constraint.kind === 'foreignKey') toggleForeignKeyColumn(constraint, column, options);
+	else constraint.columns = toggled(constraint.columns, column);
+	if (constraint.kind === 'primaryKey')
+		for (const col of draft.columns)
+			if (constraint.columns.includes(col.name)) col.nullable = false;
+	if (autoNamed.has(constraint))
+		constraint.name = suggestName(draft, nameKind(constraint.kind), constraint.columns, constraint);
+}
+
+export function toggleIndexColumn(
+	draft: TableStructure,
+	index: StructureIndex,
+	column: string,
+	autoNamed: AutoNamed
+): void {
+	index.columns = toggled(index.columns, column);
+	if (autoNamed.has(index)) index.name = suggestName(draft, 'index', index.columns, index);
+}
+
+/** True when a foreign key points at the table being created, whose columns exist only in the draft. */
+export function referencesDraft(
+	draft: TableStructure,
+	original: TableStructure | null,
+	schema: string,
+	constraint: StructureConstraint
+): boolean {
+	return (
+		(constraint.refSchema || schema) === schema && constraint.refTable === draft.name && !original
+	);
+}
+
+/** Cache key of a referenced table's columns. */
+export const referenceKey = (schema: string, constraint: StructureConstraint) =>
+	`${constraint.refSchema || schema}.${constraint.refTable ?? ''}`;
+
+/** Columns a foreign key may reference: the draft's own for a new self reference, else the loaded ones. */
+export function referenceOptions(
+	draft: TableStructure,
+	original: TableStructure | null,
+	schema: string,
+	refColumns: Record<string, ReferenceOption[]>,
+	constraint: StructureConstraint
+): ReferenceOption[] {
+	if (referencesDraft(draft, original, schema, constraint)) {
+		const keys = primaryKeyColumns(draft);
+		return draft.columns.map((col) => ({ name: col.name, primaryKey: keys.includes(col.name) }));
+	}
+	return refColumns[referenceKey(schema, constraint)] ?? [];
+}
+
+/**
+ * What a freshly loaded draft needs fetched for its foreign keys: relation lists of the other
+ * schemas it references, and one foreign key per referenced table for its column list.
+ */
+export function referenceLoads(
+	draft: TableStructure,
+	schema: string
+): { schemas: string[]; foreignKeys: StructureConstraint[] } {
+	const schemas = new Set<string>();
+	const foreignKeys = new Map<string, StructureConstraint>();
+	for (const c of draft.constraints) {
+		if (c.refSchema && c.refSchema !== schema) schemas.add(c.refSchema);
+		if (c.kind === 'foreignKey' && c.refTable && !foreignKeys.has(referenceKey(schema, c)))
+			foreignKeys.set(referenceKey(schema, c), c);
+	}
+	return { schemas: [...schemas], foreignKeys: [...foreignKeys.values()] };
+}
+
+/** Tables a foreign key can point at; the draft table itself is offered within its own schema. */
+export function referenceTables(
+	draft: TableStructure,
+	schema: string,
+	relations: Record<string, { name: string }[]>,
+	constraint: StructureConstraint
+): string[] {
+	const names = (relations[constraint.refSchema || schema] ?? []).map((r) => r.name);
+	if ((constraint.refSchema || schema) === schema && draft.name && !names.includes(draft.name))
+		names.unshift(draft.name);
+	return names;
 }

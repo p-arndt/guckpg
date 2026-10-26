@@ -1,46 +1,26 @@
+import { PendingRequest } from './pending.svelte.js';
+
 export interface HostKeyQuestion {
 	host: string;
 	port: number;
 	fingerprint: string;
 }
 
-interface Pending extends HostKeyQuestion {
-	resolve: (trust: boolean) => void;
-}
-
 /** Bridges a backend "unknown host key" error to the confirmation dialog. */
-class HostKeyPrompt {
-	pending = $state<Pending | null>(null);
+class HostKeyPrompt extends PendingRequest<HostKeyQuestion, boolean> {
+	constructor() {
+		super(false);
+	}
 
-	ask(question: HostKeyQuestion): Promise<boolean> {
+	override ask({ host, port, fingerprint }: HostKeyQuestion): Promise<boolean> {
 		// A second tunnel to the same host while the dialog is open gets the
 		// same answer instead of a second dialog.
-		const current = this.pending;
-		if (current && current.host === question.host && current.port === question.port) {
-			return new Promise((resolve) => {
-				const previous = current.resolve;
-				current.resolve = (trust) => {
-					previous(trust);
-					resolve(trust);
-				};
-			});
-		}
-		current?.resolve(false);
-		return new Promise((resolve) => {
-			this.pending = {
-				host: question.host,
-				port: question.port,
-				fingerprint: question.fingerprint,
-				resolve
-			};
-		});
-	}
-
-	answer(trust: boolean) {
-		const p = this.pending;
-		this.pending = null;
-		p?.resolve(trust);
+		return super.ask(
+			{ host, port, fingerprint },
+			(open) => open.host === host && open.port === port
+		);
 	}
 }
 
+export { HostKeyPrompt };
 export const hostKeyPrompt = new HostKeyPrompt();

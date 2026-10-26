@@ -4,6 +4,9 @@
 	import { toast } from 'svelte-sonner';
 	import { api, errorMessage, type Relation, type SchemaObject } from '#lib/api.js';
 	import { groupSchemaObjects, groupRelations } from '#lib/objects.js';
+	import { Resource } from '#lib/resource.svelte.js';
+	import { ident, qualified } from '#lib/sql-quote.js';
+	import { catalog } from '#lib/state/catalog.js';
 	import { confirmation } from '#lib/state/confirm.svelte.js';
 	import { formatEstimate } from '#lib/format.js';
 	import { connections } from '#lib/state/connections.svelte.js';
@@ -24,41 +27,33 @@
 
 	// svelte-ignore state_referenced_locally
 	let expanded = $state(initiallyExpanded);
-	let loading = $state(false);
-	let relations = $state<Relation[] | null>(null);
-	let objects = $state<SchemaObject[]>([]);
 	let refreshing = $state<string | null>(null);
 	let creatingTable = $state(false);
 	const readOnly = $derived(connections.get(connectionId)?.readOnly ?? true);
-	let error = $state<string | null>(null);
 
-	async function load() {
-		loading = true;
-		error = null;
-		try {
-			[relations, objects] = await Promise.all([
-				api.listRelations(connectionId, database, schema),
-				api.listObjects(connectionId, database, schema)
-			]);
-		} catch (e) {
-			error = errorMessage(e);
-		} finally {
-			loading = false;
-		}
+	let fresh = false;
+	const contents = new Resource(async () => {
+		const [relations, objects] = await Promise.all([
+			catalog.relations(connectionId, database, schema, fresh),
+			api.listObjects(connectionId, database, schema)
+		]);
+		return { relations, objects };
+	});
+	const relations = $derived(contents.data?.relations ?? null);
+	const objects = $derived(contents.data?.objects ?? []);
+	const error = $derived(contents.failed ? errorMessage(contents.error) : null);
+
+	function load(reload = false) {
+		fresh = reload;
+		void contents.load();
 	}
 
 	$effect(() => {
 		void connections.revision[connectionId];
-		if (expanded) void load();
+		if (expanded) load();
 	});
 
-	function quoted(name: string) {
-		return /^[a-z_][a-z0-9_]*$/.test(name) ? name : `"${name.replaceAll('"', '""')}"`;
-	}
-
-	function qualified(name: string) {
-		return schema === 'public' ? quoted(name) : `${quoted(schema)}.${quoted(name)}`;
-	}
+	const tableName = (name: string) => qualified(schema, name);
 
 	const relationGroups = $derived(groupRelations(relations ?? []));
 	const objectGroups = $derived(groupSchemaObjects(objects));
@@ -103,7 +98,7 @@
 				{...props}
 				{depth}
 				{expanded}
-				{loading}
+				loading={contents.loading}
 				label={schema}
 				onclick={() => (expanded = !expanded)}
 			>
@@ -120,7 +115,7 @@
 				tabs.openQuery(
 					connectionId,
 					database,
-					schema === 'public' ? '' : `SET search_path TO ${quoted(schema)};\n`
+					schema === 'public' ? '' : `SET search_path TO ${ident(schema)};\n`
 				)}
 		>
 			New query
@@ -128,7 +123,7 @@
 		<ContextMenu.Item onSelect={() => tabs.openDiagram(connectionId, database, schema)}>
 			ER diagram
 		</ContextMenu.Item>
-		<ContextMenu.Item onSelect={load}>Refresh</ContextMenu.Item>
+		<ContextMenu.Item onSelect={() => load(true)}>Refresh</ContextMenu.Item>
 	</ContextMenu.Content>
 </ContextMenu.Root>
 
@@ -185,10 +180,10 @@
 				<ContextMenu.Content class="w-52">
 					{#if rel.kind === 'table' || rel.kind === 'partitioned'}
 						<ContextMenu.Item
-							onSelect={() => {
-								const tab = tabs.openTable(connectionId, database, schema, rel.name);
-								tab.requestedView = 'structure';
-							}}>Design table</ContextMenu.Item
+							onSelect={() =>
+								void tabs
+									.openTable(connectionId, database, schema, rel.name)
+									.switchView('structure')}>Design table</ContextMenu.Item
 						>
 					{/if}
 					<ContextMenu.Item
@@ -213,7 +208,7 @@
 							tabs.openQuery(
 								connectionId,
 								database,
-								`SELECT *\nFROM ${qualified(rel.name)}\nLIMIT 100;`
+								`SELECT *\nFROM ${tableName(rel.name)}\nLIMIT 100;`
 							)}
 					>
 						New query (SELECT)
@@ -221,7 +216,7 @@
 					<ContextMenu.Separator />
 					<ContextMenu.Item
 						onSelect={async () => {
-							await navigator.clipboard.writeText(qualified(rel.name));
+							await navigator.clipboard.writeText(tableName(rel.name));
 							toast.success('Copied name');
 						}}
 					>

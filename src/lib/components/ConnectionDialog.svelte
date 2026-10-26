@@ -33,8 +33,10 @@
 		{ value: 'disable', label: 'Disable' },
 		{ value: 'prefer', label: 'Prefer' },
 		{ value: 'require', label: 'Require' },
+		{ value: 'verify-ca', label: 'Verify CA' },
 		{ value: 'verify-full', label: 'Verify full' }
 	];
+	const verifies = (mode: SslMode) => mode === 'verify-ca' || mode === 'verify-full';
 	const AUTH_LABELS: Record<SshAuth['method'], string> = {
 		agent: 'Automatic',
 		key: 'Private key file',
@@ -86,6 +88,7 @@
 			user: form.user.trim(),
 			database: form.database.trim() || 'postgres',
 			port: Number(form.port) || 5432,
+			sslRootCert: verifies(form.sslMode) ? form.sslRootCert?.trim() || null : null,
 			ssh: useSsh
 				? { host: ssh.host.trim(), port: Number(ssh.port) || 22, user: ssh.user.trim(), auth }
 				: null
@@ -238,6 +241,19 @@
 							</Select.Root>
 						</div>
 					</div>
+
+					{#if verifies(form.sslMode)}
+						<div class="grid gap-1.5">
+							<Label for="c-root-cert">CA certificate file</Label>
+							<Input
+								id="c-root-cert"
+								bind:value={form.sslRootCert}
+								placeholder="System certificates"
+								autocapitalize="off"
+								spellcheck={false}
+							/>
+						</div>
+					{/if}
 
 					<Label class="flex items-center gap-2 font-normal">
 						<Checkbox bind:checked={form.readOnly} />

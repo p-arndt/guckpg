@@ -3,8 +3,8 @@
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import { highlightSql } from '#lib/highlight.js';
 	import { isSqlBlock, parseMarkdown, type Block, type Inline } from '#lib/markdown.js';
+	import SqlBlock from './SqlBlock.svelte';
 
 	interface Props {
 		text: string;
@@ -27,6 +27,7 @@
 	}
 
 	const SQL_LANG = /^(sql|postgresql|postgres|pgsql|psql)$/i;
+	const codeClass = 'overflow-x-auto bg-background px-3 py-2.5 text-[12.5px] leading-[1.6]';
 </script>
 
 {#snippet inline(nodes: Inline[])}
@@ -71,11 +72,11 @@
 				</Button>
 			{/if}
 		</figcaption>
-		<pre class="overflow-x-auto bg-background px-3 py-2.5 text-[12.5px] leading-[1.6]"><code
-				>{#if SQL_LANG.test(block.lang)}{#each highlightSql(block.text) as token, t (t)}{#if token.classes}<span
-								class={token.classes}>{token.text}</span
-							>{:else}{token.text}{/if}{/each}{:else}{block.text}{/if}</code
-			></pre>
+		{#if SQL_LANG.test(block.lang)}
+			<SqlBlock code sql={block.text} class={codeClass} />
+		{:else}
+			<pre class={codeClass}><code>{block.text}</code></pre>
+		{/if}
 	</figure>
 {/snippet}
 

@@ -73,7 +73,7 @@
 		const c = deleting;
 		deleting = null;
 		if (!c) return;
-		tabs.closeForConnection(c.id);
+		if (!(await tabs.requestCloseForConnection(c.id))) return;
 		try {
 			await connections.remove(c.id);
 		} catch (e) {

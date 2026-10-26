@@ -14,12 +14,13 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import LockIcon from '@lucide/svelte/icons/lock';
 	import { toast } from 'svelte-sonner';
-	import { api, errorMessage } from '#lib/api.js';
+	import { errorMessage } from '#lib/api.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { tabs } from '#lib/state/tabs.svelte.js';
+	import { catalog } from '#lib/state/catalog.js';
 
 	interface Props {
 		onNewQuery: () => void;
@@ -61,7 +62,7 @@
 		if (!context) return;
 		schemas = null;
 		try {
-			schemas = await api.listSchemas(context.connection.id, context.database);
+			schemas = await catalog.schemas(context.connection.id, context.database);
 		} catch (e) {
 			schemas = [];
 			toast.error(errorMessage(e));
@@ -81,7 +82,7 @@
 	async function disconnect() {
 		if (!context) return;
 		const id = context.connection.id;
-		tabs.closeForConnection(id);
+		if (!(await tabs.requestCloseForConnection(id))) return;
 		try {
 			await connections.disconnect(id);
 		} catch (e) {

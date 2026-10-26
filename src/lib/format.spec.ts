@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatCount, formatDuration, formatEstimate } from './format';
+import { formatCount, formatDuration, formatEstimate, plural } from './format';
 
 describe('format', () => {
 	it('counts with separators', () => {
@@ -20,5 +20,12 @@ describe('format', () => {
 		expect(formatEstimate(1234)).toBe('~1.2k');
 		expect(formatEstimate(123_456)).toBe('~123k');
 		expect(formatEstimate(2_500_000)).toBe('~2.5M');
+	});
+
+	it('pluralizes with a count', () => {
+		expect(plural(1, 'row')).toBe('1 row');
+		expect(plural(0, 'row')).toBe('0 rows');
+		expect(plural(1234, 'change')).toBe('1,234 changes');
+		expect(plural(2, 'more column', 'more columns')).toBe('2 more columns');
 	});
 });

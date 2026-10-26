@@ -4,6 +4,7 @@
 	import LinkIcon from '@lucide/svelte/icons/link';
 	import TableIcon from '@lucide/svelte/icons/table-2';
 	import EyeIcon from '@lucide/svelte/icons/eye';
+	import { plural } from '#lib/format.js';
 	import {
 		BODY_PAD_PX,
 		HEADER_PX,
@@ -90,7 +91,7 @@
 			{/each}
 			{#if data.hiddenColumns > 0}
 				<div class="flex items-center px-2.5 pl-8 text-muted-foreground" style:height="{ROW_PX}px">
-					+ {data.hiddenColumns} more {data.hiddenColumns === 1 ? 'column' : 'columns'}
+					+ {plural(data.hiddenColumns, 'more column', 'more columns')}
 				</div>
 			{:else if data.columns.length === 0}
 				<div class="px-2.5 text-muted-foreground" style:height="{ROW_PX}px">no columns</div>

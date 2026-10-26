@@ -145,7 +145,11 @@
 		view?.focus();
 	}
 
+	/** The text the editor last reported or was given, so syncing needs no second doc.toString(). */
+	let synced = '';
+
 	onMount(() => {
+		synced = value;
 		view = new EditorView({
 			parent: host,
 			state: EditorState.create({
@@ -178,7 +182,9 @@
 						};
 					}),
 					EditorView.updateListener.of((u) => {
-						if (u.docChanged) value = u.state.doc.toString();
+						if (!u.docChanged) return;
+						synced = u.state.doc.toString();
+						value = synced;
 					})
 				]
 			})
@@ -195,7 +201,7 @@
 	// Outside changes (e.g. "New query" with SQL) replace the document.
 	$effect(() => {
 		const next = value;
-		if (view && next !== view.state.doc.toString()) {
+		if (view && next !== synced) {
 			view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } });
 		}
 	});

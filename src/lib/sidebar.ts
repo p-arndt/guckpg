@@ -86,5 +86,49 @@ export function renameFolder(
 export function connectionUrl(c: ConnectionConfig): string {
 	const host = c.host.includes(':') ? `[${c.host}]` : c.host;
 	const url = `postgresql://${encodeURIComponent(c.user)}@${host}:${c.port}/${encodeURIComponent(c.database)}`;
-	return c.sslMode === 'prefer' ? url : `${url}?sslmode=${c.sslMode}`;
+	const params: string[] = [];
+	if (c.sslMode !== 'prefer') params.push(`sslmode=${c.sslMode}`);
+	// libpq only reads the root certificate when it verifies the server.
+	if (c.sslRootCert && (c.sslMode === 'verify-ca' || c.sslMode === 'verify-full'))
+		params.push(`sslrootcert=${encodeURIComponent(c.sslRootCert)}`);
+	return params.length ? `${url}?${params.join('&')}` : url;
+}
+
+/** A visible tree row as keyboard navigation sees it. */
+export interface TreeItem {
+	level: number;
+	/** undefined for leaves */
+	expanded?: boolean;
+}
+
+export type TreeMove = { focus: number } | { toggle: number } | null;
+
+/**
+ * What an arrow, Home or End key does on the row at `index`, following the
+ * WAI-ARIA tree pattern: up and down walk the visible rows, right expands or
+ * enters, left collapses or goes to the parent.
+ */
+export function treeKeyMove(items: TreeItem[], index: number, key: string): TreeMove {
+	const item = items[index];
+	if (!item) return null;
+	switch (key) {
+		case 'ArrowDown':
+			return index + 1 < items.length ? { focus: index + 1 } : null;
+		case 'ArrowUp':
+			return index > 0 ? { focus: index - 1 } : null;
+		case 'Home':
+			return { focus: 0 };
+		case 'End':
+			return { focus: items.length - 1 };
+		case 'ArrowRight':
+			if (item.expanded === false) return { toggle: index };
+			if (item.expanded && (items[index + 1]?.level ?? 0) > item.level) return { focus: index + 1 };
+			return null;
+		case 'ArrowLeft':
+			if (item.expanded) return { toggle: index };
+			for (let i = index - 1; i >= 0; i--) if (items[i].level < item.level) return { focus: i };
+			return null;
+		default:
+			return null;
+	}
 }

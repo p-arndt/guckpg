@@ -1,30 +1,27 @@
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
 	import {
-		aiApi,
-		defaultAiConfig,
 		splitApprovals,
 		currentActivityLabel,
 		completedActivityCount,
 		toolOutcome,
 		approvalOutcome,
 		thinkingPreview,
-		type AiProvider,
 		type AiActivity,
 		type ToolOutcome,
 		type ToolState
 	} from '#lib/ai.js';
 	import { fade, slide } from 'svelte/transition';
 	import { prefersReducedMotion } from 'svelte/motion';
-	import { api, errorMessage } from '#lib/api.js';
+	import { catalog } from '#lib/state/catalog.js';
+	import { plural } from '#lib/format.js';
 	import * as Select from '#lib/components/ui/select/index.js';
-	import { highlightSql } from '#lib/highlight.js';
+	import { sqlPreview as previewOf } from '#lib/sql-preview.js';
 	import { ai, type AiAccess } from '#lib/state/ai.svelte.js';
 	import { connections } from '#lib/state/connections.svelte.js';
-	import { chatContext } from '#lib/chat-context.js';
+	import { activeChatContext, chatContext, contextKey } from '#lib/chat-context.js';
 	import { tabs } from '#lib/state/tabs.svelte.js';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import { Input } from '#lib/components/ui/input/index.js';
 	import XIcon from '@lucide/svelte/icons/x';
 	import Maximize2Icon from '@lucide/svelte/icons/maximize-2';
 	import Minimize2Icon from '@lucide/svelte/icons/minimize-2';
@@ -50,7 +47,9 @@
 	import SquarePenIcon from '@lucide/svelte/icons/square-pen';
 	import { followChatEnd, nextFollowing, stopsFollowing } from '#lib/chat-scroll.js';
 	import { isSendKey } from '#lib/composer.js';
+	import AiSettingsForm from './AiSettingsForm.svelte';
 	import Markdown from './Markdown.svelte';
+	import SqlBlock from './SqlBlock.svelte';
 
 	const SUGGESTIONS = [
 		'Give me an overview of this schema',
@@ -59,128 +58,37 @@
 	];
 
 	let { open, onClose }: { open: boolean; onClose: () => void } = $props();
-	/** Covers the work area for long answers; the side pane stays sized as before. */
-	let expanded = $state(false);
-	$effect(() => {
-		if (!open) expanded = false;
-	});
-	let draft = $state('');
-	let config = $state(defaultAiConfig());
-	let apiKey = $state('');
-	let basicUsername = $state('');
-	let basicPassword = $state('');
-	let clearBasic = $state(false);
-	let clearKey = $state(false);
-	let saving = $state(false);
-	let settingsOpen = $state(false);
-	let settingsError = $state('');
-	let models = $state<string[]>([]);
-	let modelsLoaded = $state(false);
-	let loadingModels = $state(false);
-	let modelRequest = 0;
-	async function loadModels() {
-		const request = ++modelRequest;
-		loadingModels = true;
-		modelsLoaded = false;
-		models = [];
-		settingsError = '';
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		try {
-			const timeout = new Promise<never>((_, reject) => {
-				timer = setTimeout(
-					() =>
-						reject(
-							new Error('Loading models timed out. Check the URL, connection, and authentication.')
-						),
-					15000
-				);
-			});
-			const result = await Promise.race([
-				aiApi.models(
-					{ ...config, baseUrl: config.baseUrl.trim() },
-					config.authMode === 'bearer' && apiKey ? apiKey : undefined,
-					config.authMode === 'basic' && (basicUsername || basicPassword)
-						? { username: basicUsername, password: basicPassword }
-						: undefined
-				),
-				timeout
-			]);
-			if (request === modelRequest) {
-				models = result;
-				modelsLoaded = true;
-			}
-		} catch (e) {
-			if (request === modelRequest) settingsError = errorMessage(e);
-		} finally {
-			clearTimeout(timer);
-			if (request === modelRequest) loadingModels = false;
-		}
-	}
-	function invalidateModels() {
-		modelRequest++;
-		models = [];
-		modelsLoaded = false;
-		loadingModels = false;
-		settingsError = '';
-	}
-	function closeSettings() {
-		invalidateModels();
-		config = { ...ai.settings.config };
-		apiKey = '';
-		basicUsername = '';
-		basicPassword = '';
-		clearKey = false;
-		clearBasic = false;
-		settingsOpen = false;
-	}
-	function openSettings() {
-		settingsOpen = true;
-		if (config.provider === 'ollama') void loadModels();
-	}
-	let loadStarted = false;
-	const sameEndpoint = $derived(
-		config.provider === ai.settings.config.provider &&
-			config.baseUrl.trim() === ai.settings.config.baseUrl
-	);
-	let selectedDatabase = $state<{ connectionId: string; database: string } | null>(null);
-	let databases = $state<string[]>([]);
-	let previousBase: string | null = null;
-	const baseContext = $derived.by(() => {
-		const tab = tabs.active;
-		const connection =
-			(tab && connections.status[tab.connectionId] === 'connected'
-				? connections.get(tab.connectionId)
-				: undefined) ?? connections.list.find((c) => connections.status[c.id] === 'connected');
-		if (!connection || connections.status[connection.id] !== 'connected') return null;
-		return {
-			connectionId: connection.id,
-			database:
-				(tab?.connectionId === connection.id ? tab.database : undefined) ??
-				connections.info[connection.id]?.database ??
-				connection.database,
-			name: connection.name,
-			user: connection.user,
-			readOnly: connection.readOnly
-		};
-	});
+	/** Returns `value`; reading `key` makes a writable `$derived` fall back to it on change. */
+	const resetOn = <T,>(key: unknown, value: T) => (void key, value);
 
+	/** Covers the work area for long answers; closing the panel leaves full screen. */
+	let expanded = $derived(resetOn(open, false));
+	let settingsOpen = $state(false);
+	const baseContext = $derived(
+		activeChatContext(tabs.active, connections.list, connections.status, connections.info)
+	);
+	// A separate derived, so only a real move resets the pick, not every new context object.
+	const baseKey = $derived(contextKey(baseContext));
+	/** A connection or database picked in the panel; following another tab drops it. */
+	let selectedDatabase = $derived<{ connectionId: string; database: string } | null>(
+		resetOn(baseKey, null)
+	);
 	const context = $derived(
 		chatContext(baseContext, selectedDatabase, connections.list, connections.status)
 	);
+	const currentKey = $derived(contextKey(context));
+	/** A half-typed question belongs to the database it was written for. */
+	let draft = $derived(resetOn(currentKey, ''));
+	let databases = $state<string[]>([]);
+	// Lists the databases of the chat's connection for the picker; only a move to another
+	// connection or database refetches, not every status change elsewhere.
 	$effect(() => {
-		const base = baseContext;
-		const key = base ? JSON.stringify([base.connectionId, base.database]) : null;
-		if (key !== previousBase) {
-			selectedDatabase = null;
-			previousBase = key;
-		}
-	});
-	$effect(() => {
-		const currentContext = context;
+		void currentKey;
+		const currentContext = untrack(() => context);
 		let current = true;
 		databases = currentContext ? [currentContext.database] : [];
 		if (currentContext) {
-			api.listDatabases(currentContext.connectionId).then(
+			catalog.databases(currentContext.connectionId).then(
 				(list) => {
 					if (current)
 						databases = list.includes(currentContext.database)
@@ -194,76 +102,28 @@
 			current = false;
 		};
 	});
-
-	async function loadSettings() {
-		await ai.load();
-		config = { ...ai.settings.config };
-		if (!config.model) openSettings();
-	}
+	// The chat store is shared app state, and the context moves with tabs and connections that
+	// change outside this component, so there is no single event to hook this into.
 	$effect(() => {
-		const current = context;
+		const key = currentKey;
+		const current = untrack(() => context);
 		untrack(() =>
 			ai.setContext(
-				current ? { connectionId: current.connectionId, database: current.database } : null
+				key && current ? { connectionId: current.connectionId, database: current.database } : null
 			)
 		);
-		draft = '';
 	});
+
+	let loadStarted = false;
+	// Settings load lazily the first time the panel is shown, which the parent decides.
 	$effect(() => {
-		if (!open) {
-			apiKey = '';
-			basicUsername = '';
-			basicPassword = '';
-		} else if (!loadStarted) {
-			loadStarted = true;
-			untrack(() => {
-				void loadSettings();
-			});
-		}
+		if (!open || loadStarted) return;
+		loadStarted = true;
+		untrack(() => void loadSettings());
 	});
-
-	function changeProvider(event: Event) {
-		invalidateModels();
-		config = defaultAiConfig((event.target as HTMLSelectElement).value as AiProvider);
-		apiKey = '';
-		clearKey = false;
-		basicUsername = '';
-		basicPassword = '';
-		clearBasic = false;
-		ai.reset();
-	}
-
-	async function saveSettings() {
-		saving = true;
-		settingsError = '';
-		ai.reset();
-		try {
-			ai.settings = await aiApi.saveSettings(
-				{ ...config, baseUrl: config.baseUrl.trim(), model: config.model.trim() },
-				config.authMode === 'bearer'
-					? clearKey && sameEndpoint
-						? ''
-						: apiKey || undefined
-					: undefined,
-				config.authMode === 'basic' && clearBasic && sameEndpoint
-					? { username: '', password: '' }
-					: config.authMode === 'basic' && (basicUsername || basicPassword)
-						? { username: basicUsername, password: basicPassword }
-						: undefined
-			);
-			ai.loaded = true;
-			config = { ...ai.settings.config };
-			apiKey = '';
-			clearKey = false;
-			basicUsername = '';
-			basicPassword = '';
-			clearBasic = false;
-			settingsOpen = false;
-		} catch (e) {
-			settingsError = errorMessage(e);
-		} finally {
-			saving = false;
-		}
+	async function loadSettings() {
+		await ai.load();
+		if (!ai.settings.config.model) settingsOpen = true;
 	}
 
 	let elapsedSeconds = $state(0);
@@ -277,7 +137,7 @@
 		return () => clearInterval(timer);
 	});
 
-	const inputEnabled = $derived(!!context && !ai.busy && !saving && !settingsOpen && ai.loaded);
+	const inputEnabled = $derived(!!context && !ai.busy && !settingsOpen && ai.loaded);
 	const canSend = $derived(inputEnabled);
 	const accessLevels = [
 		{
@@ -290,7 +150,7 @@
 		{
 			value: 'read',
 			label: 'Read data',
-			hint: 'Runs SQL automatically in a read-only transaction. Database functions may have external side effects.',
+			hint: 'Reads rows and schema automatically. Raw SQL needs your approval and runs read-only; database functions may have external side effects.',
 			icon: EyeIcon,
 			tone: 'text-cool'
 		},
@@ -350,25 +210,21 @@
 
 	function scrollToEnd(smooth: boolean) {
 		if (!log) return;
-		const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-		log.scrollTo({ top: log.scrollHeight, behavior: smooth && !reduce ? 'smooth' : 'auto' });
+		log.scrollTo({
+			top: log.scrollHeight,
+			behavior: smooth && !prefersReducedMotion.current ? 'smooth' : 'auto'
+		});
 		atBottom = true;
 	}
 
+	// Messages, streamed tokens and tool progress all end up as DOM changes inside the log, so
+	// watching the DOM follows every kind of update without listing what the template reads.
 	$effect(() => {
-		void ai.messages.length;
-		void ai.busy;
-		void ai.streamedText;
-		const lastActivity = ai.activity.at(-1);
-		if (lastActivity?.type === 'thinking') void lastActivity.text;
-		if (lastActivity?.type === 'tool') {
-			void lastActivity.summary;
-			void lastActivity.approval;
-		}
 		const target = log;
-		if (target && untrack(() => atBottom)) {
-			void tick().then(() => followChatEnd(target, untrack(() => atBottom) && target === log));
-		}
+		if (!target) return;
+		const observer = new MutationObserver(() => followChatEnd(target, atBottom));
+		observer.observe(target, { childList: true, subtree: true, characterData: true });
+		return () => observer.disconnect();
 	});
 
 	// Reopening the panel lands on the latest message.
@@ -380,18 +236,23 @@
 </script>
 
 {#snippet sqlPreview(sql: string)}
+	{@const preview = previewOf(sql)}
 	<div class="overflow-hidden rounded-lg border border-rule-2 bg-background">
 		<div
-			class="flex items-center justify-between border-b border-rule-2 px-3 py-1.5 text-[11px] font-medium tracking-wide text-muted-foreground"
+			class="flex items-center justify-between gap-2 border-b border-rule-2 px-3 py-1.5 text-[11px] font-medium tracking-wide text-muted-foreground"
 		>
-			<span>SQL</span><span>PostgreSQL</span>
+			<span>SQL</span>
+			<span class="tabular-nums"
+				>{plural(preview.lines, 'line')} · {plural(preview.chars, 'character')}{preview.collapsed
+					? ' · whitespace shortened'
+					: ''}</span
+			>
 		</div>
-		<pre
-			class="measured max-h-56 overflow-auto px-3 py-2.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground"><code
-				>{#each highlightSql(sql) as token, index (index)}{#if token.classes}<span
-							class={token.classes}>{token.text}</span
-						>{:else}{token.text}{/if}{/each}</code
-			></pre>
+		<SqlBlock
+			code
+			sql={preview.text}
+			class="measured max-h-56 overflow-auto px-3 py-2.5 text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground"
+		/>
 	</div>
 {/snippet}
 
@@ -509,7 +370,9 @@
 								<p class="font-medium text-foreground">
 									{item.name === 'propose_write'
 										? 'Review database change'
-										: 'Review database access'}
+										: item.name === 'query_sql'
+											? 'Review SQL query'
+											: 'Review database access'}
 								</p>
 								<p class="mt-0.5 break-words text-muted-foreground">
 									{context?.name} / {context?.database}
@@ -521,7 +384,9 @@
 							<p class="leading-relaxed text-muted-foreground">
 								{item.name === 'propose_write'
 									? 'Review the entire statement before approving. It may delete data or trigger additional changes.'
-									: 'Review the requested operation and its arguments before approving.'}
+									: item.name === 'query_sql'
+										? 'Review the query before approving. It runs in a read-only transaction, but database functions may still have side effects.'
+										: 'Review the requested operation and its arguments before approving.'}
 							</p>
 							{#if item.approval.decision === undefined}
 								<div class="flex flex-wrap justify-end gap-2">
@@ -601,7 +466,7 @@
 						: 'Worked'}</span
 				>
 				<span aria-hidden="true" class="opacity-60">·</span>
-				<span class="whitespace-nowrap">{steps} {steps === 1 ? 'step' : 'steps'}</span>
+				<span class="whitespace-nowrap">{plural(steps, 'step')}</span>
 				<span aria-hidden="true" class="opacity-60">·</span>
 				<span class="whitespace-nowrap"
 					>{running ? elapsedSeconds : Math.max(1, Math.round((durationMs ?? 0) / 1000))}s</span
@@ -647,7 +512,7 @@
 				aria-label="Settings"
 				title="Settings"
 				aria-pressed={settingsOpen}
-				onclick={() => (settingsOpen ? closeSettings() : openSettings())}><Settings2Icon /></Button
+				onclick={() => (settingsOpen = !settingsOpen)}><Settings2Icon /></Button
 			>
 			<Button
 				size="icon-sm"
@@ -672,218 +537,16 @@
 		</div>
 	</div>
 	{#if settingsOpen}
-		<form
-			class="glass-card mx-2 mb-2 flex min-h-0 flex-1 flex-col rounded-xl border bg-background shadow-panel"
-			onsubmit={(e) => {
-				e.preventDefault();
-				void saveSettings();
-			}}
-		>
-			<div class="flex items-center justify-between border-b px-4 py-3">
-				<div>
-					<h3 class="font-medium">Assistant settings</h3>
-					<p class="text-xs text-muted-foreground">Configure the model and its connection</p>
-				</div>
-				<Button
-					type="button"
-					size="icon-sm"
-					variant="ghost"
-					aria-label="Close settings"
-					onclick={closeSettings}><XIcon /></Button
-				>
-			</div>
-			<div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-				<div class="flex flex-col gap-1.5">
-					<label for="ai-provider" class="text-[13px] font-medium text-muted-foreground"
-						>Provider</label
-					>
-					<select
-						id="ai-provider"
-						class="h-8 rounded-lg border border-input bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-55"
-						value={config.provider}
-						onchange={changeProvider}
-						disabled={saving}
-					>
-						<option value="ollama">Ollama</option>
-						<option value="openaiResponses">OpenAI Responses API</option>
-						<option value="openaiCompatible">OpenAI-compatible</option>
-					</select>
-				</div>
-				<div class="flex flex-col gap-1.5">
-					<label for="ai-base-url" class="text-[13px] font-medium text-muted-foreground"
-						>Base URL</label
-					>
-					<Input
-						id="ai-base-url"
-						bind:value={config.baseUrl}
-						oninput={invalidateModels}
-						required
-						disabled={saving}
-					/>
-				</div>
-				<div class="flex flex-col gap-1.5">
-					<label for="ai-model" class="text-[13px] font-medium text-muted-foreground">Model</label>
-					{#if config.provider === 'ollama'}
-						<div class="flex gap-2">
-							<select
-								aria-label="Available Ollama models"
-								class="h-8 min-w-0 flex-1 rounded-lg border border-input bg-background px-2 text-sm"
-								value={models.includes(config.model) ? config.model : ''}
-								onchange={(e) => {
-									if (e.currentTarget.value) config.model = e.currentTarget.value;
-								}}
-								disabled={!models.length || saving}
-							>
-								<option value=""
-									>{loadingModels
-										? 'Loading models…'
-										: modelsLoaded && !models.length
-											? 'No models found'
-											: 'Select a model'}</option
-								>
-								{#each models as model (model)}<option value={model}>{model}</option>{/each}
-							</select>
-							<Button
-								type="button"
-								size="sm"
-								variant="outline"
-								disabled={loadingModels || saving}
-								onclick={loadModels}>{loadingModels ? 'Loading…' : 'Refresh'}</Button
-							>
-						</div>
-						<p role="status" class="text-xs text-muted-foreground">
-							{loadingModels
-								? 'Connecting to Ollama…'
-								: modelsLoaded
-									? `${models.length} models available`
-									: 'Uses the credentials below or saved credentials for this URL.'}
-						</p>
-					{/if}
-					<Input
-						id="ai-model"
-						bind:value={config.model}
-						placeholder="Or enter a model name"
-						required
-						disabled={saving}
-					/>
-				</div>
-				<div class="flex flex-col gap-1.5">
-					<label for="ai-auth-mode" class="text-[13px] font-medium text-muted-foreground"
-						>Authentication</label
-					>
-					<select
-						id="ai-auth-mode"
-						class="h-8 rounded-lg border border-input bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-55"
-						bind:value={config.authMode}
-						onchange={invalidateModels}
-						disabled={saving}
-					>
-						<option value="none">None</option>
-						<option value="bearer">Bearer token (API key)</option>
-						<option value="basic">Basic Auth</option>
-					</select>
-				</div>
-				{#if config.authMode === 'bearer'}
-					<div class="flex flex-col gap-1.5">
-						<label for="ai-api-key" class="text-[13px] font-medium text-muted-foreground"
-							>API key</label
-						>
-						<Input
-							id="ai-api-key"
-							type="password"
-							autocomplete="off"
-							bind:value={apiKey}
-							oninput={invalidateModels}
-							placeholder="Leave blank to keep saved key"
-							disabled={saving || (clearKey && sameEndpoint)}
-						/>
-						<p class="text-xs text-muted-foreground">
-							{sameEndpoint
-								? ai.settings.hasApiKey
-									? 'API key saved in keychain.'
-									: 'No API key saved.'
-								: 'Save settings to check the key for this endpoint.'}
-						</p>
-					</div>
-					{#if sameEndpoint && ai.settings.hasApiKey}
-						<label class="flex items-center gap-2 text-[13px]"
-							><input
-								type="checkbox"
-								class="accent-signal"
-								bind:checked={clearKey}
-								disabled={saving}
-							/>Delete saved API key on save</label
-						>
-					{/if}
-				{:else if config.authMode === 'basic'}
-					<div class="grid grid-cols-2 gap-2">
-						<div class="flex min-w-0 flex-col gap-1.5">
-							<label for="ai-basic-username" class="text-[13px] font-medium text-muted-foreground"
-								>Username</label
-							>
-							<Input
-								id="ai-basic-username"
-								autocomplete="off"
-								bind:value={basicUsername}
-								oninput={invalidateModels}
-								placeholder="Blank keeps saved"
-								disabled={saving || (clearBasic && sameEndpoint)}
-							/>
-						</div>
-						<div class="flex min-w-0 flex-col gap-1.5">
-							<label for="ai-basic-password" class="text-[13px] font-medium text-muted-foreground"
-								>Password</label
-							>
-							<Input
-								id="ai-basic-password"
-								type="password"
-								autocomplete="off"
-								bind:value={basicPassword}
-								oninput={invalidateModels}
-								placeholder="Blank keeps saved"
-								disabled={saving || (clearBasic && sameEndpoint)}
-							/>
-						</div>
-					</div>
-					<p class="-mt-1.5 text-xs text-muted-foreground">
-						{sameEndpoint
-							? ai.settings.hasBasicAuth
-								? 'Basic Auth credentials saved in keychain.'
-								: 'No Basic Auth credentials saved.'
-							: 'Save settings to check the credentials for this endpoint.'}
-					</p>
-					{#if sameEndpoint && ai.settings.hasBasicAuth}
-						<label class="flex items-center gap-2 text-[13px]"
-							><input
-								type="checkbox"
-								class="accent-signal"
-								bind:checked={clearBasic}
-								disabled={saving}
-							/>Delete saved Basic Auth on save</label
-						>
-					{/if}
-				{/if}
-				{#if settingsError}<p
-						role="alert"
-						class="rounded-lg bg-bad-soft px-3 py-2 text-[13px] text-bad"
-					>
-						{settingsError}
-					</p>{/if}
-			</div>
-			<div class="flex shrink-0 justify-end gap-2 border-t px-4 py-3">
-				<Button type="button" size="sm" variant="ghost" onclick={closeSettings}>Cancel</Button>
-				<Button type="submit" size="sm" disabled={saving}
-					>{saving ? 'Saving…' : 'Save settings'}</Button
-				>
-			</div>
-		</form>
+		{#key ai.loaded}
+			<AiSettingsForm {open} onClose={() => (settingsOpen = false)} />
+		{/key}
 	{:else}
 		<div class="flex shrink-0 items-center gap-1.5 px-3 pb-2 text-xs">
 			<button
 				type="button"
 				class="measured flex h-6 min-w-0 items-center rounded-md border px-2 text-ink-2 transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground"
 				title="{ai.settings.config.baseUrl}, click to change"
-				onclick={openSettings}
+				onclick={() => (settingsOpen = true)}
 			>
 				<span class="truncate">{ai.settings.config.model || 'No model'}</span>
 			</button>

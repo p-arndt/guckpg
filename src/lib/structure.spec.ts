@@ -88,6 +88,21 @@ describe('structure change queue', () => {
 		]);
 		expect(destructive(changes)).toBe(true);
 	});
+	it('sends a USING expression only with a type change', () => {
+		const draft = structuredClone(original);
+		draft.columns[0].using = '  id::text  ';
+		expect(buildRequest('public', original, draft).changes).toEqual([]);
+		draft.columns[0].dataType = 'text';
+		const [change] = buildRequest('public', original, draft).changes;
+		expect(change).toMatchObject({
+			op: 'alterColumn',
+			name: 'id',
+			column: { dataType: 'text', using: 'id::text' }
+		});
+		draft.columns[0].using = ' ';
+		const [blank] = buildRequest('public', original, draft).changes;
+		expect(blank.op === 'alterColumn' && 'using' in blank.column).toBe(false);
+	});
 	it('keeps primary keys, self references, and indexes through a rename', () => {
 		const source = structuredClone(original);
 		source.constraints[0].kind = 'primaryKey';

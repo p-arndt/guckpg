@@ -10,7 +10,7 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import { api, errorMessage, type CompletionTable, type Diagram } from '#lib/api.js';
-	import { highlightSql } from '#lib/highlight.js';
+	import SqlBlock from '../SqlBlock.svelte';
 	import {
 		addTable,
 		buildSql,
@@ -133,6 +133,8 @@
 	);
 
 	const built = $derived(buildSql(model));
+	const sqlClass =
+		'measured mx-2 mb-2 min-h-0 flex-1 overflow-auto rounded-lg border bg-work p-2.5 text-xs leading-relaxed whitespace-pre-wrap select-text';
 
 	function clear() {
 		Object.assign(model, emptyModel());
@@ -276,12 +278,13 @@
 							{/each}
 						</ul>
 					{/if}
-					<pre
-						class="measured mx-2 mb-2 min-h-0 flex-1 overflow-auto rounded-lg border bg-work p-2.5 text-xs leading-relaxed whitespace-pre-wrap select-text">{#if built.sql}{#each highlightSql(built.sql) as token, t (t)}{#if token.classes}<span
-										class={token.classes}>{token.text}</span
-									>{:else}{token.text}{/if}{/each}{:else}<span class="text-muted-foreground"
+					{#if built.sql}
+						<SqlBlock sql={built.sql} class={sqlClass} />
+					{:else}
+						<pre class={sqlClass}><span class="text-muted-foreground"
 								>-- The query appears here as you build it.</span
-							>{/if}</pre>
+							></pre>
+					{/if}
 				</Resizable.Pane>
 			</Resizable.PaneGroup>
 		</Resizable.Pane>

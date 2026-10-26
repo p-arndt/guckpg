@@ -2,40 +2,57 @@
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-	import PlusIcon from '@lucide/svelte/icons/plus';
-	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { toast } from 'svelte-sonner';
 	import { onDestroy, untrack } from 'svelte';
-	import UndoIcon from '@lucide/svelte/icons/undo-2';
-	import RedoIcon from '@lucide/svelte/icons/redo-2';
-	import CodeIcon from '@lucide/svelte/icons/code';
-	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import { api, errorMessage, type SourceInfo } from '#lib/api.js';
 	import {
 		cellText,
 		columnOffsets,
 		columnWidths,
 		isNumeric,
+		cycleSort,
+		fromTsv,
 		MIN_COL_PX,
-		parseTsv,
+		pastedValue,
 		rowAt,
-		rowSpan,
 		sortOrder,
 		toTsv,
 		visibleColumns,
 		visibleRange,
-		type Cell
+		type Cell,
+		type Sort
 	} from '#lib/grid.js';
+	import { plural } from '#lib/format.js';
 	import { DEFAULT, GridEdits, buildChanges, type NewCell } from '#lib/state/edits.svelte.js';
 	import ValueDialog, { type Viewing } from './ValueDialog.svelte';
 	import RowFormPanel from './RowFormPanel.svelte';
 	import type { RowField } from '#lib/row-form.js';
 	import PanelsTopLeftIcon from '@lucide/svelte/icons/panels-top-left';
-	import { highlightJson, highlightSql, isJsonType, type Token } from '#lib/highlight.js';
-
-	type Sort = { column: string; dir: 'asc' | 'desc' } | null;
+	import { highlightJson, isJsonType, type Token } from '#lib/highlight.js';
+	import { dragPointer } from '#lib/drag.js';
+	import {
+		allDeleted,
+		editChanged,
+		gridItems,
+		inSpan,
+		openEdit,
+		pastePlan,
+		pickedSpan,
+		planPickedDelete,
+		spanItems,
+		type CellEdit,
+		type GridItem,
+		type RowPick
+	} from '#lib/grid-selection.js';
+	import { joinStatements } from '#lib/review.svelte.js';
+	import ReviewSqlDialog from './ReviewSqlDialog.svelte';
+	import GridContextMenu, {
+		type GridMenuActions,
+		type GridMenuTarget
+	} from './grid/GridContextMenu.svelte';
+	import GridFooter from './grid/GridFooter.svelte';
 
 	interface Props {
 		columns: string[];
@@ -43,7 +60,7 @@
 		/** Offset added to row numbers (paging). */
 		rowOffset?: number;
 		/** Set for server-side sorting; without it, headers sort locally. */
-		sort?: Sort;
+		sort?: Sort | null;
 		onSort?: (column: string) => void;
 		primaryKeys?: string[];
 		columnTypes?: Record<string, string>;
@@ -74,8 +91,7 @@
 	const ROW_PX = 28;
 	const HEADER_PX = 32;
 
-	/** A displayed row: a loaded row (by index into `rows`) or a new one. */
-	type Item = { kind: 'row'; orig: number } | { kind: 'new'; index: number };
+	type Item = GridItem;
 
 	let scroller = $state<HTMLDivElement | null>(null);
 	let scrollTop = $state(0);
@@ -85,12 +101,12 @@
 	let widths = $state<number[]>([]);
 	let selected = $state<{ row: number; col: number } | null>(null);
 	/** Whole rows picked from the row numbers; `selected` stays on the moving end. */
-	let rowPick = $state<{ anchor: number; focus: number } | null>(null);
-	let localSort = $state<Sort>(null);
+	let rowPick = $state<RowPick | null>(null);
+	let localSort = $state<Sort | null>(null);
 	let viewing = $state<Viewing | null>(null);
 	/** The row panel follows the selected row while open. */
 	let formOpen = $state(false);
-	let editing = $state<{ row: number; col: number; draft: string } | null>(null);
+	let editing = $state<CellEdit | null>(null);
 	let saving = $state(false);
 	let preview = $state<string[] | null>(null);
 	const edits = new GridEdits();
@@ -129,6 +145,10 @@
 	$effect(() => onDirtyChange?.(edits.count));
 	onDestroy(() => onDirtyChange?.(0));
 
+	/** Ends a row-pick or column-resize drag still running when the grid goes away. */
+	let stopDrag: (() => void) | null = null;
+	onDestroy(() => stopDrag?.());
+
 	const editable = $derived(source !== null && editTarget !== null && !editTarget.readOnly);
 	const activeSort = $derived(onSort ? sort : localSort);
 
@@ -137,31 +157,18 @@
 		return sortOrder(rows, columns.indexOf(localSort.column), localSort.dir);
 	});
 
-	const items = $derived<Item[]>([
-		...order.map((orig) => ({ kind: 'row' as const, orig })),
-		...edits.inserted.map((_, index) => ({ kind: 'new' as const, index }))
-	]);
+	const items = $derived(gridItems(order, edits.inserted.length));
 
-	const picked = $derived.by(() => {
-		if (!rowPick || !items.length) return null;
-		const { start, end } = rowSpan(rowPick.anchor, rowPick.focus);
-		return { start, end: Math.min(end, items.length - 1) };
-	});
+	const picked = $derived(pickedSpan(rowPick, items.length));
 	const pickedCount = $derived(picked ? picked.end - picked.start + 1 : 0);
-	const pickedAllDeleted = $derived.by(() => {
-		if (!picked) return false;
-		const loaded = items
-			.slice(picked.start, picked.end + 1)
-			.flatMap((item) => (item.kind === 'row' ? [item.orig] : []));
-		return loaded.length > 0 && loaded.every((orig) => edits.deleted[orig]);
-	});
+	const pickedAllDeleted = $derived(allDeleted(spanItems(items, picked), edits.deleted));
 
 	function isPicked(index: number): boolean {
-		return picked !== null && index >= picked.start && index <= picked.end;
+		return inSpan(picked, index);
 	}
 
 	function pickedItems(): Item[] {
-		return picked ? items.slice(picked.start, picked.end + 1) : [];
+		return spanItems(items, picked);
 	}
 
 	const numberWidth = $derived(Math.max(40, String(rowOffset + rows.length).length * 8 + 20));
@@ -198,8 +205,8 @@
 			: edits.inserted[item.index][col];
 	}
 
-	function rowValues(item: Item): Cell[] {
-		return columns.map((_, c) => cellValue(item, c) ?? null);
+	function rowValues(item: Item): NewCell[] {
+		return columns.map((_, c) => cellValue(item, c));
 	}
 
 	function canEdit(item: Item, col: number): boolean {
@@ -207,8 +214,9 @@
 		return item.kind === 'new' || !edits.deleted[item.orig];
 	}
 
-	function setValue(item: Item, col: number, value: Cell) {
-		if (item.kind === 'row') edits.setCell(item.orig, col, value, rows[item.orig][col]);
+	/** `DEFAULT` only applies to new rows; a loaded row gets NULL instead. */
+	function setValue(item: Item, col: number, value: NewCell) {
+		if (item.kind === 'row') edits.setCell(item.orig, col, value ?? null, rows[item.orig][col]);
 		else edits.setNewCell(item.index, col, value);
 	}
 
@@ -221,13 +229,13 @@
 			openValue(row, col);
 			return;
 		}
-		editing = { row, col, draft: initial ?? current ?? '' };
+		editing = openEdit(row, col, current, initial);
 	}
 
 	function commitEdit() {
 		if (!editing) return;
 		const item = items[editing.row];
-		if (item) setValue(item, editing.col, editing.draft);
+		if (item && editChanged(editing)) setValue(item, editing.col, editing.draft);
 		editing = null;
 		scroller?.focus();
 	}
@@ -305,19 +313,12 @@
 	/** Delete the picked rows, or restore them when all of them are already deleted. */
 	function togglePickedDelete() {
 		if (!editable || !picked) return;
-		const chosen = pickedItems();
-		const loaded = chosen.flatMap((item) => (item.kind === 'row' ? [item.orig] : []));
-		const restore = pickedAllDeleted;
-		// Highest index first so removing new rows does not shift the ones still to remove.
-		const fresh = chosen
-			.flatMap((item) => (item.kind === 'new' ? [item.index] : []))
-			.sort((a, b) => b - a);
+		const plan = planPickedDelete(pickedItems(), edits.deleted);
 		edits.batch(() => {
-			for (const orig of loaded)
-				if (Boolean(edits.deleted[orig]) === restore) edits.toggleDelete(orig);
-			if (!restore) for (const index of fresh) edits.removeNewRow(index);
+			for (const orig of plan.toggle) edits.toggleDelete(orig);
+			for (const index of plan.remove) edits.removeNewRow(index);
 		});
-		if (!restore && fresh.length) {
+		if (plan.remove.length) {
 			rowPick = null;
 			selected = null;
 		}
@@ -338,33 +339,27 @@
 		const anchor = e.shiftKey && rowPick ? rowPick.anchor : index;
 		pickRows(anchor, index);
 		let lastY = e.clientY;
-		let frame = 0;
-		const update = () => {
-			if (!scroller) return;
-			const rect = scroller.getBoundingClientRect();
-			// Dragging past the top or bottom edge scrolls, faster the further out.
-			const edge = 24;
-			if (lastY < rect.top + HEADER_PX + edge) {
-				scroller.scrollTop -= Math.min(40, rect.top + HEADER_PX + edge - lastY) / 2;
-			} else if (lastY > rect.bottom - edge) {
-				scroller.scrollTop += Math.min(40, lastY - (rect.bottom - edge)) / 2;
-			}
-			const focus = rowAt(lastY - rect.top + scroller.scrollTop, HEADER_PX, ROW_PX, items.length);
-			if (rowPick && focus !== rowPick.focus) {
-				rowPick = { anchor, focus };
-				selected = { row: focus, col: selected?.col ?? 0 };
-			}
-			frame = requestAnimationFrame(update);
-		};
-		const move = (ev: PointerEvent) => (lastY = ev.clientY);
-		const up = () => {
-			cancelAnimationFrame(frame);
-			window.removeEventListener('pointermove', move);
-			window.removeEventListener('pointerup', up);
-		};
-		window.addEventListener('pointermove', move);
-		window.addEventListener('pointerup', up);
-		frame = requestAnimationFrame(update);
+		stopDrag?.();
+		stopDrag = dragPointer(e, {
+			move: (ev) => (lastY = ev.clientY),
+			frame: () => {
+				if (!scroller) return;
+				const rect = scroller.getBoundingClientRect();
+				// Dragging past the top or bottom edge scrolls, faster the further out.
+				const edge = 24;
+				if (lastY < rect.top + HEADER_PX + edge) {
+					scroller.scrollTop -= Math.min(40, rect.top + HEADER_PX + edge - lastY) / 2;
+				} else if (lastY > rect.bottom - edge) {
+					scroller.scrollTop += Math.min(40, lastY - (rect.bottom - edge)) / 2;
+				}
+				const focus = rowAt(lastY - rect.top + scroller.scrollTop, HEADER_PX, ROW_PX, items.length);
+				if (rowPick && focus !== rowPick.focus) {
+					rowPick = { anchor, focus };
+					selected = { row: focus, col: selected?.col ?? 0 };
+				}
+			},
+			end: () => (stopDrag = null)
+		});
 	}
 
 	function addRow() {
@@ -384,19 +379,14 @@
 	/** Paste a cell or a block from a spreadsheet, starting at the selection. */
 	function paste(text: string) {
 		if (!selected || !editable) return;
-		const block = parseTsv(text);
-		const start = selected;
+		const plan = pastePlan(selected, fromTsv(text), columns.length, items.length);
 		edits.batch(() => {
-			block.forEach((values, r) => {
-				const row = start.row + r;
-				// Pasting past the end adds rows, like a spreadsheet.
-				while (row >= items.length) edits.addRow(columns.length);
-				values.forEach((value, c) => {
-					const col = start.col + c;
-					const item = items[row];
-					if (col < columns.length && item && canEdit(item, col)) setValue(item, col, value);
-				});
-			});
+			for (let n = 0; n < plan.addRows; n++) edits.addRow(columns.length);
+			for (const { row, col, value } of plan.cells) {
+				const item = items[row];
+				if (item && canEdit(item, col))
+					setValue(item, col, pastedValue(value, item.kind === 'new'));
+			}
 		});
 	}
 
@@ -429,7 +419,7 @@
 				source.table,
 				changes
 			);
-			toast.success(`Saved ${n} change${n === 1 ? '' : 's'} to ${source.table}`);
+			toast.success(`Saved ${plural(n, 'change')} to ${source.table}`);
 			edits.reset();
 			onSaved?.();
 		} catch (e) {
@@ -444,12 +434,7 @@
 			onSort(column);
 			return;
 		}
-		localSort =
-			localSort?.column !== column
-				? { column, dir: 'asc' }
-				: localSort.dir === 'asc'
-					? { column, dir: 'desc' }
-					: null;
+		localSort = cycleSort(localSort, column);
 	}
 
 	function startResize(event: PointerEvent, col: number) {
@@ -457,15 +442,13 @@
 		event.stopPropagation();
 		const startX = event.clientX;
 		const startWidth = widths[col];
-		const move = (e: PointerEvent) => {
-			widths[col] = Math.max(MIN_COL_PX, startWidth + e.clientX - startX);
-		};
-		const up = () => {
-			window.removeEventListener('pointermove', move);
-			window.removeEventListener('pointerup', up);
-		};
-		window.addEventListener('pointermove', move);
-		window.addEventListener('pointerup', up);
+		stopDrag?.();
+		stopDrag = dragPointer(event, {
+			move: (e) => {
+				widths[col] = Math.max(MIN_COL_PX, startWidth + e.clientX - startX);
+			},
+			end: () => (stopDrag = null)
+		});
 	}
 
 	async function copy(text: string, what: string) {
@@ -574,10 +557,10 @@
 		return true;
 	}
 
-	function copyPicked() {
+	function copyPicked(withHeader = false) {
 		const chosen = pickedItems();
 		return copy(
-			toTsv(null, chosen.map(rowValues)),
+			toTsv(withHeader ? columns : null, chosen.map(rowValues)),
 			chosen.length === 1 ? 'row' : `${chosen.length} rows`
 		);
 	}
@@ -625,6 +608,43 @@
 	const selectedDeleted = $derived(
 		selectedItem?.kind === 'row' && Boolean(edits.deleted[selectedItem.orig])
 	);
+
+	const menuTarget = $derived<GridMenuTarget>(
+		picked
+			? { kind: 'rows', count: pickedCount, allDeleted: pickedAllDeleted }
+			: {
+					kind: 'cell',
+					selected: selected !== null,
+					canEdit: !!selected && !!selectedItem && canEdit(selectedItem, selected.col),
+					canRevert:
+						!!selected &&
+						selectedItem?.kind === 'row' &&
+						edits.isEdited(selectedItem.orig, selected.col),
+					rowDeleted: selectedDeleted
+				}
+	);
+
+	const menuActions: GridMenuActions = {
+		openRowForm: () => {
+			if (picked) openRowForm(picked.start);
+			else if (selected) openRowForm(selected.row);
+		},
+		copyRows: (withHeader) => void copyPicked(withHeader),
+		toggleDelete: () => {
+			if (picked) togglePickedDelete();
+			else if (selected) toggleDelete(selected.row);
+		},
+		addRow,
+		editCell: () => selected && startEdit(selected.row, selected.col),
+		setNull: () => selected && selectedItem && setValue(selectedItem, selected.col, null),
+		revertCell: () => selected && revertCell(selected.row, selected.col),
+		undo: () => edits.undo(),
+		copyValue: () => void copy(selectedValue() ?? '', 'value'),
+		copyRow: () => selected && void copy(toTsv(null, [rowValues(items[selected.row])]), 'row'),
+		openValue: () => selected && openValue(selected.row, selected.col),
+		copyColumnName: () => selected && void copy(columns[selected.col], 'column name'),
+		copyAll: () => void copy(toTsv(columns, items.map(rowValues)), `${items.length} rows`)
+	};
 </script>
 
 <div class="relative flex h-full min-h-0">
@@ -820,179 +840,25 @@
 					</div>
 				{/snippet}
 			</ContextMenu.Trigger>
-			<ContextMenu.Content class="w-56">
-				{#if picked}
-					{@const what = pickedCount === 1 ? 'row' : `${pickedCount} rows`}
-					<ContextMenu.Item
-						disabled={pickedCount !== 1 || saving}
-						onSelect={() => picked && openRowForm(picked.start)}
-					>
-						Open row form<ContextMenu.Shortcut>⇧↵</ContextMenu.Shortcut>
-					</ContextMenu.Item>
-					<ContextMenu.Item onSelect={copyPicked}>
-						Copy {what}
-						<ContextMenu.Shortcut>⌘C</ContextMenu.Shortcut>
-					</ContextMenu.Item>
-					<ContextMenu.Item
-						onSelect={() => picked && copy(toTsv(columns, pickedItems().map(rowValues)), what)}
-					>
-						Copy {what} with header
-					</ContextMenu.Item>
-					{#if editable}
-						<ContextMenu.Separator />
-						<ContextMenu.Item disabled={saving} onSelect={togglePickedDelete}>
-							{pickedAllDeleted ? 'Restore' : 'Delete'}
-							{what}
-							<ContextMenu.Shortcut>⌫</ContextMenu.Shortcut>
-						</ContextMenu.Item>
-						<ContextMenu.Item onSelect={addRow}>Add row</ContextMenu.Item>
-					{/if}
-				{:else}
-					<ContextMenu.Item
-						disabled={!selected || saving}
-						onSelect={() => selected && openRowForm(selected.row)}
-					>
-						Open row form<ContextMenu.Shortcut>⇧↵</ContextMenu.Shortcut>
-					</ContextMenu.Item>
-					<ContextMenu.Separator />
-					{#if editable}
-						<ContextMenu.Item
-							disabled={!selected || !selectedItem || !canEdit(selectedItem, selected.col)}
-							onSelect={() => selected && startEdit(selected.row, selected.col)}
-						>
-							Edit cell
-							<ContextMenu.Shortcut>↵</ContextMenu.Shortcut>
-						</ContextMenu.Item>
-						<ContextMenu.Item
-							disabled={!selected || !selectedItem || !canEdit(selectedItem, selected.col)}
-							onSelect={() =>
-								selected && selectedItem && setValue(selectedItem, selected.col, null)}
-						>
-							Set NULL
-						</ContextMenu.Item>
-						<ContextMenu.Item
-							disabled={!selected ||
-								selectedItem?.kind !== 'row' ||
-								!edits.isEdited(selectedItem.orig, selected.col)}
-							onSelect={() => selected && revertCell(selected.row, selected.col)}
-						>
-							Revert cell
-						</ContextMenu.Item>
-						<ContextMenu.Item
-							disabled={!selected}
-							onSelect={() => selected && toggleDelete(selected.row)}
-						>
-							{selectedDeleted ? 'Restore row' : 'Delete row'}
-							<ContextMenu.Shortcut>⌫</ContextMenu.Shortcut>
-						</ContextMenu.Item>
-						<ContextMenu.Item onSelect={addRow}>Add row</ContextMenu.Item>
-						<ContextMenu.Item disabled={!edits.canUndo} onSelect={() => edits.undo()}>
-							Undo
-							<ContextMenu.Shortcut>⌘Z</ContextMenu.Shortcut>
-						</ContextMenu.Item>
-						<ContextMenu.Separator />
-					{/if}
-					<ContextMenu.Item
-						disabled={!selected}
-						onSelect={() => copy(selectedValue() ?? '', 'value')}
-					>
-						Copy value
-						<ContextMenu.Shortcut>⌘C</ContextMenu.Shortcut>
-					</ContextMenu.Item>
-					<ContextMenu.Item
-						disabled={!selected}
-						onSelect={() => selected && copy(toTsv(null, [rowValues(items[selected.row])]), 'row')}
-					>
-						Copy row
-						<ContextMenu.Shortcut>⇧⌘C</ContextMenu.Shortcut>
-					</ContextMenu.Item>
-					<ContextMenu.Item
-						disabled={!selected}
-						onSelect={() => selected && openValue(selected.row, selected.col)}
-					>
-						{editable ? 'Edit value…' : 'View value'}
-					</ContextMenu.Item>
-					<ContextMenu.Separator />
-					<ContextMenu.Item
-						disabled={!selected}
-						onSelect={() => selected && copy(columns[selected.col], 'column name')}
-					>
-						Copy column name
-					</ContextMenu.Item>
-					<ContextMenu.Item
-						onSelect={() => copy(toTsv(columns, items.map(rowValues)), `${items.length} rows`)}
-					>
-						Copy all as TSV
-					</ContextMenu.Item>
-				{/if}
-			</ContextMenu.Content>
+			<GridContextMenu
+				target={menuTarget}
+				actions={menuActions}
+				{editable}
+				{saving}
+				canUndo={edits.canUndo}
+			/>
 		</ContextMenu.Root>
 
-		{#if editable && source}
-			<div class="flex h-9 shrink-0 items-center gap-1 border-t px-2 text-xs">
-				<Button size="xs" variant="ghost" onclick={addRow} title="Add a row">
-					<PlusIcon /> Row
-				</Button>
-				<Button
-					size="icon-xs"
-					variant="ghost"
-					disabled={!edits.canUndo}
-					onclick={() => edits.undo()}
-					title="Undo (⌘Z)"
-				>
-					<UndoIcon />
-				</Button>
-				<Button
-					size="icon-xs"
-					variant="ghost"
-					disabled={!edits.canRedo}
-					onclick={() => edits.redo()}
-					title="Redo (⇧⌘Z)"
-				>
-					<RedoIcon />
-				</Button>
-				{#if edits.count > 0}
-					<span class="ml-auto font-medium text-signal-text">
-						<span class="measured">{edits.count}</span> unsaved change{edits.count === 1 ? '' : 's'}
-					</span>
-					<Button
-						size="xs"
-						variant="ghost"
-						onclick={showPreview}
-						title="Show the SQL that will run"
-					>
-						<CodeIcon /> SQL
-					</Button>
-					<Button size="xs" variant="ghost" disabled={saving} onclick={() => edits.discard()}>
-						Discard
-					</Button>
-					<Button size="xs" disabled={saving} onclick={save}>
-						{#if saving}<LoaderIcon class="animate-spin" />{/if}
-						Save <span class="measured opacity-70">⌘S</span>
-					</Button>
-				{:else}
-					<span class="ml-auto flex min-w-0 items-center gap-4 truncate text-muted-foreground">
-						<span class="truncate">Double-click or type to edit</span>
-						<span class="flex items-center gap-1.5 whitespace-nowrap"
-							><kbd class="key">⌫</kbd> deletes a row</span
-						>
-						<span class="flex items-center gap-1.5 whitespace-nowrap"
-							><kbd class="key">⌘V</kbd> pastes from spreadsheets</span
-						>
-						<span class="measured whitespace-nowrap text-ink-2">{source.schema}.{source.table}</span
-						>
-					</span>
-				{/if}
-			</div>
-		{:else if editTarget && !source}
-			<div class="flex h-8 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
-				Read-only result: editing needs rows from one table with its primary key in the result.
-			</div>
-		{:else if editTarget?.readOnly && source}
-			<div class="flex h-8 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
-				Read-only connection.
-			</div>
-		{/if}
+		<GridFooter
+			{edits}
+			{editable}
+			{source}
+			{editTarget}
+			{saving}
+			onAddRow={addRow}
+			onPreview={showPreview}
+			onSave={save}
+		/>
 	</div>
 	{#if formItem && formRow !== null}
 		<RowFormPanel
@@ -1015,35 +881,21 @@
 
 <ValueDialog bind:viewing />
 
-<Dialog.Root
+<ReviewSqlDialog
 	open={preview !== null}
-	onOpenChange={(open) => {
-		if (!open) preview = null;
+	title="Pending SQL"
+	sql={joinStatements(preview ?? [])}
+	cancelLabel="Close"
+	confirmLabel="Save"
+	confirmDisabled={saving}
+	sqlClass="max-h-[55vh] overflow-auto rounded-lg border bg-background p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap select-text"
+	onClose={() => (preview = null)}
+	onConfirm={async () => {
+		preview = null;
+		await save();
 	}}
 >
-	<Dialog.Content class="sm:max-w-3xl">
-		<Dialog.Header>
-			<Dialog.Title>Pending SQL</Dialog.Title>
-			<Dialog.Description>
-				Runs in one transaction. If any UPDATE or DELETE does not hit exactly one row, nothing is
-				saved.
-			</Dialog.Description>
-		</Dialog.Header>
-		<pre
-			class="max-h-[55vh] overflow-auto rounded-lg border bg-background p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap select-text">{#each highlightSql((preview ?? [])
-					.map((sql) => sql + ';')
-					.join('\n')) as token, t (t)}<span class={token.classes}>{token.text}</span>{/each}</pre>
-		<Dialog.Footer>
-			<Button variant="outline" onclick={() => (preview = null)}>Close</Button>
-			<Button
-				disabled={saving}
-				onclick={async () => {
-					preview = null;
-					await save();
-				}}
-			>
-				Save
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
+	{#snippet description()}
+		Runs in one transaction. If any UPDATE or DELETE does not hit exactly one row, nothing is saved.
+	{/snippet}
+</ReviewSqlDialog>

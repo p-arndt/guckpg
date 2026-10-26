@@ -9,7 +9,7 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
-	import { api, errorMessage, isAppError } from '#lib/api.js';
+	import { errorMessage } from '#lib/api.js';
 	import { formatCount, formatDuration } from '#lib/format.js';
 	import { tabs, type TableTab } from '#lib/state/tabs.svelte.js';
 	import { connections } from '#lib/state/connections.svelte.js';
@@ -30,117 +30,32 @@
 	const columnTypes = $derived(Object.fromEntries(tab.columns.map((c) => [c.name, c.dataType])));
 	const primaryKeys = $derived(tab.columns.filter((c) => c.primaryKey).map((c) => c.name));
 	let testDataOpen = $state(false);
-	let filterColumn = $state('');
-	let filterValue = $state('');
-	let appliedFilter = $state<{ column: string; value: string } | null>(null);
-	let gridDirty = $state(0);
-	let structureDirty = $state(0);
-	let structureBusy = $state(false);
-	let gridVersion = $state(0);
+	// svelte-ignore state_referenced_locally
+	let filterColumn = $state(tab.filter?.column ?? '');
+	// svelte-ignore state_referenced_locally
+	let filterValue = $state(tab.filter?.value ?? '');
 	let designerOpened = $state(false);
-	$effect(() => {
-		tab.dirty = gridDirty + structureDirty;
-		tab.structureBusy = structureBusy;
-	});
 	$effect(() => {
 		if (tab.view === 'structure') designerOpened = true;
 	});
-	$effect(() => {
-		const requested = tab.requestedView;
-		if (requested && !tab.running && !structureBusy) {
-			tab.requestedView = null;
-			void switchView(requested);
-		}
-	});
 
-	async function switchView(view: 'data' | 'structure') {
-		if (tab.view === view || structureBusy || tab.running) return;
-		if (view === 'structure' && gridDirty) {
-			if (!(await confirmDiscard(gridDirty))) return;
-			gridDirty = 0;
-			gridVersion++;
-		}
-		tab.view = view;
-	}
-
-	async function structureApplied(name: string) {
-		tab.table = name;
-		tab.title = tab.schema === 'public' ? name : `${tab.schema}.${name}`;
-		tab.sort = null;
-		filterColumn = '';
-		filterValue = '';
-		appliedFilter = null;
-		tab.offset = 0;
-		tab.output = null;
-		structureDirty = 0;
-		connections.refresh(tab.connectionId);
-		try {
-			tab.columns = await api.listColumns(tab.connectionId, tab.database, tab.schema, name);
-			await load();
-		} catch (e) {
-			tab.error = isAppError(e) ? e : { kind: 'message', message: errorMessage(e) };
-		}
-	}
-
-	async function load() {
-		tab.running = true;
-		tab.error = null;
-		try {
-			const out = await api.browseTable(tab.id, tab.connectionId, tab.database, {
-				schema: tab.schema,
-				table: tab.table,
-				sort: tab.sort,
-				filter: appliedFilter,
-				limit: tab.limit,
-				offset: tab.offset
-			});
-			tab.lastSql = out.sql;
-			tab.output = { results: out.results, elapsedMs: out.elapsedMs };
-		} catch (e) {
-			tab.error = isAppError(e) ? e : { kind: 'message', message: errorMessage(e) };
-		} finally {
-			tab.running = false;
-		}
-	}
-
-	onMount(() => {
-		if (tab.output) return;
-		api
-			.listColumns(tab.connectionId, tab.database, tab.schema, tab.table)
-			.then((cols) => (tab.columns = cols))
-			.catch(() => {});
-		void load();
-	});
+	onMount(() => void tab.open());
 
 	/** Run an action that reloads the rows, unless the user keeps unsaved edits. */
 	async function guarded(action: () => void) {
 		if (await confirmDiscard(tab.dirty)) action();
 	}
 
-	function sortBy(column: string) {
-		const s = tab.sort;
-		tab.sort =
-			s?.column !== column
-				? { column, dir: 'asc' }
-				: s.dir === 'asc'
-					? { column, dir: 'desc' }
-					: null;
-		tab.offset = 0;
-		void load();
-	}
-
 	function applyFilter() {
-		void guarded(() => {
-			appliedFilter =
-				filterColumn && filterValue ? { column: filterColumn, value: filterValue } : null;
-			tab.offset = 0;
-			void load();
-		});
+		void guarded(() => void tab.applyFilter({ column: filterColumn, value: filterValue }));
 	}
 
-	function page(delta: number) {
-		tab.offset = Math.max(0, tab.offset + delta * tab.limit);
-		void load();
+	const load = () => tab.load();
+
+	function structureApplied(name: string) {
+		filterColumn = '';
+		filterValue = '';
+		void tab.structureApplied(name);
 	}
 </script>
 
@@ -156,10 +71,10 @@
 				aria-selected={tab.view === view}
 				variant={tab.view === view ? 'secondary' : 'ghost'}
 				size="sm"
-				disabled={structureBusy || tab.running}
-				onclick={() => switchView(view as 'data' | 'structure')}
-				>{view === 'data' ? 'Data' : 'Structure'}{view === 'structure' && structureDirty
-					? ` (${structureDirty})`
+				disabled={tab.structureBusy || tab.running}
+				onclick={() => tab.switchView(view as 'data' | 'structure')}
+				>{view === 'data' ? 'Data' : 'Structure'}{view === 'structure' && tab.structureDirty
+					? ` (${tab.structureDirty})`
 					: ''}</Button
 			>
 		{/each}
@@ -184,7 +99,7 @@
 				size="icon-sm"
 				variant="ghost"
 				disabled={tab.running || tab.offset === 0}
-				onclick={() => guarded(() => page(-1))}
+				onclick={() => guarded(() => tab.page(-1))}
 				title="Previous page"
 				aria-label="Previous page"
 			>
@@ -203,7 +118,7 @@
 				size="icon-sm"
 				variant="ghost"
 				disabled={tab.running || (result?.rows.length ?? 0) < tab.limit}
-				onclick={() => guarded(() => page(1))}
+				onclick={() => guarded(() => tab.page(1))}
 				title="Next page"
 				aria-label="Next page"
 			>
@@ -212,12 +127,7 @@
 			<Select.Root
 				type="single"
 				value={String(tab.limit)}
-				onValueChange={(v) =>
-					guarded(() => {
-						tab.limit = Number(v);
-						tab.offset = 0;
-						void load();
-					})}
+				onValueChange={(v) => guarded(() => tab.setLimit(Number(v)))}
 			>
 				<Select.Trigger size="sm" class="ml-1 h-7 text-[13px]" aria-label="Rows per page"
 					>{tab.limit} / page</Select.Trigger
@@ -287,7 +197,7 @@
 				type="submit"
 				disabled={tab.running || (!filterColumn && !!filterValue)}>Apply</Button
 			>
-			{#if appliedFilter}<Button
+			{#if tab.filter}<Button
 					size="sm"
 					variant="ghost"
 					type="button"
@@ -310,13 +220,13 @@
 					</p>
 				</div>
 			{:else if result}
-				{#key gridVersion}
+				{#key tab.gridVersion}
 					<ResultGrid
 						columns={result.columns}
 						rows={result.rows}
 						rowOffset={tab.offset}
 						sort={tab.sort}
-						onSort={(column) => guarded(() => sortBy(column))}
+						onSort={(column) => guarded(() => tab.sortBy(column))}
 						{primaryKeys}
 						{columnTypes}
 						source={result.source}
@@ -328,7 +238,7 @@
 								}
 							: null}
 						onSaved={load}
-						onDirtyChange={(n) => (gridDirty = n)}
+						onDirtyChange={(n) => tab.setGridDirty(n)}
 					/>
 				{/key}
 			{:else}
@@ -376,8 +286,8 @@
 				schema={tab.schema}
 				table={tab.table}
 				onApplied={structureApplied}
-				onDirtyChange={(count) => (structureDirty = count)}
-				onBusyChange={(busy) => (structureBusy = busy)}
+				onDirtyChange={(count) => tab.setStructureDirty(count)}
+				onBusyChange={(busy) => (tab.structureBusy = busy)}
 			/>
 		</div>
 	{/if}

@@ -16,7 +16,8 @@
 	} from '#lib/ai.js';
 	import { fade, slide } from 'svelte/transition';
 	import { prefersReducedMotion } from 'svelte/motion';
-	import { errorMessage } from '#lib/api.js';
+	import { api, errorMessage } from '#lib/api.js';
+	import * as Select from '#lib/components/ui/select/index.js';
 	import { highlightSql } from '#lib/highlight.js';
 	import { ai, type AiAccess } from '#lib/state/ai.svelte.js';
 	import { connections } from '#lib/state/connections.svelte.js';
@@ -140,7 +141,14 @@
 		config.provider === ai.settings.config.provider &&
 			config.baseUrl.trim() === ai.settings.config.baseUrl
 	);
-	const context = $derived.by(() => {
+	let selectedDatabase = $state<{
+		connectionId: string;
+		baseDatabase: string;
+		database: string;
+	} | null>(null);
+	let databases = $state<string[]>([]);
+	let previousBase: string | null = null;
+	const baseContext = $derived.by(() => {
 		const tab = tabs.active;
 		const connection = tab
 			? connections.get(tab.connectionId)
@@ -152,6 +160,40 @@
 			name: connection.name,
 			user: connection.user,
 			readOnly: connection.readOnly
+		};
+	});
+
+	const context = $derived.by(() => {
+		if (!baseContext) return null;
+		const selected = selectedDatabase;
+		return {
+			...baseContext,
+			database:
+				selected?.connectionId === baseContext.connectionId &&
+				selected.baseDatabase === baseContext.database
+					? selected.database
+					: baseContext.database
+		};
+	});
+	$effect(() => {
+		const base = baseContext;
+		const key = base ? JSON.stringify([base.connectionId, base.database]) : null;
+		if (key !== previousBase) {
+			selectedDatabase = null;
+			previousBase = key;
+		}
+		let current = true;
+		databases = base ? [base.database] : [];
+		if (base) {
+			api.listDatabases(base.connectionId).then(
+				(list) => {
+					if (current) databases = list.includes(base.database) ? list : [base.database, ...list];
+				},
+				() => {}
+			);
+		}
+		return () => {
+			current = false;
 		};
 	});
 
@@ -836,13 +878,33 @@
 				<span class="truncate">{ai.settings.config.model || 'No model'}</span>
 			</button>
 			{#if context}
-				<span
-					class="flex h-6 min-w-0 items-center gap-1.5 truncate rounded-md border px-2 text-muted-foreground"
-					title="Signed in as {context.user}"
+				<Select.Root
+					type="single"
+					value={context.database}
+					onValueChange={(database) => {
+						if (database && baseContext)
+							selectedDatabase = {
+								connectionId: baseContext.connectionId,
+								baseDatabase: baseContext.database,
+								database
+							};
+					}}
 				>
-					<DatabaseIcon class="size-3 shrink-0" />
-					<span class="truncate">{context.name} / {context.database}</span>
-				</span>
+					<Select.Trigger
+						size="sm"
+						class="h-6 min-w-0 gap-1.5 px-2 text-xs text-muted-foreground"
+						aria-label="Chat database"
+						title="Signed in as {context.user}"
+					>
+						<DatabaseIcon class="size-3 shrink-0" />
+						<span class="truncate">{context.name} / {context.database}</span>
+					</Select.Trigger>
+					<Select.Content>
+						{#each databases as database (database)}
+							<Select.Item value={database} label={database} />
+						{/each}
+					</Select.Content>
+				</Select.Root>
 			{/if}
 		</div>
 		<div

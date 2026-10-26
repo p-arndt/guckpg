@@ -137,7 +137,9 @@
 	outline-offset: -2px;
 }
 /* The chat composer shows focus on its whole frame (focus-within), not on the bare field. */
-[data-composer-input]:focus-visible {
+[data-composer-input]:focus-visible,
+/* The palette's field is the only thing in its panel that takes text, focus is a given there. */
+[data-palette-input]:focus-visible {
 	outline: none;
 }
 
@@ -182,6 +184,8 @@
 	kbd.key {
 		display: inline-flex;
 		align-items: center;
+		justify-content: center;
+		min-width: 1.25rem;
 		height: 1.25rem;
 		padding-inline: 5px;
 		border: var(--rule-hair) solid var(--color-rule-2);
@@ -189,6 +193,7 @@
 		border-radius: var(--radius-chip);
 		background: var(--color-paper-2);
 		color: var(--color-ink-2);
+		font-family: var(--font-display);
 		font-size: 0.75rem;
 		line-height: 1;
 	}
@@ -563,4 +568,18 @@
 .slider:disabled {
 	opacity: 0.4;
 	cursor: default;
+}
+
+/* The palette floats over the backdrop like the panels do: frosted, lit along the top. */
+.dark:not([data-background='none']) .palette {
+	border-color: transparent;
+	background: color-mix(in oklab, var(--color-paper-2) 78%, transparent);
+	box-shadow:
+		inset 0 1px 2px -1px rgb(255 255 255 / 0.2),
+		0 0 0 1px rgb(0 0 0 / 0.4),
+		0 24px 60px -12px rgb(0 0 0 / 0.75);
+	backdrop-filter: blur(28px) saturate(1.5);
+}
+.dark:not([data-background='none']) .palette .palette-item[aria-selected='true'] {
+	background: rgb(255 255 255 / 0.08);
 }

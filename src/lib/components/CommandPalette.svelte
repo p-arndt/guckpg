@@ -20,6 +20,7 @@
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { sidebar } from '#lib/state/sidebar.svelte.js';
 	import { tabs } from '#lib/state/tabs.svelte.js';
+	import { groupByKind } from '#lib/palette.js';
 
 	interface Props {
 		open: boolean;
@@ -35,6 +36,8 @@
 		label: string;
 		detail?: string;
 		kind: string;
+		/** What Enter does, shown on the selected row. */
+		hint?: string;
 		icon: typeof TableIcon;
 		color?: string | null;
 		run: () => void | Promise<void>;
@@ -108,6 +111,7 @@
 				label: t.title,
 				detail: `${connections.get(t.connectionId)?.name ?? ''} / ${t.database}`,
 				kind: 'Tab',
+				hint: 'Switch',
 				icon:
 					t.kind === 'table'
 						? TableIcon
@@ -132,6 +136,7 @@
 					label: name,
 					detail: multipleTargets ? `${connection?.name} / ${target.database}` : target.database,
 					kind: 'Table',
+					hint: 'Open',
 					icon: TableIcon,
 					color: connection?.color,
 					run: () => {
@@ -146,6 +151,7 @@
 					label: `ER diagram: ${schema}`,
 					detail: multipleTargets ? `${connection?.name} / ${target.database}` : target.database,
 					kind: 'Diagram',
+					hint: 'Open',
 					icon: NetworkIcon,
 					color: connection?.color,
 					run: () => tabs.openDiagram(target.connectionId, target.database, schema)
@@ -158,9 +164,10 @@
 			all.push({
 				key: `connection:${c.id}`,
 				label: c.name,
-				detail: `${connected ? 'New query' : 'Connect'}: ${c.folder ? `${c.folder} / ` : ''}${c.host}`,
+				detail: `${c.folder ? `${c.folder} / ` : ''}${c.host}`,
 				kind: 'Connection',
-				icon: connected ? SquareTerminalIcon : ServerIcon,
+				hint: connected ? 'New query' : 'Connect',
+				icon: ServerIcon,
 				color: c.color,
 				run: async () => {
 					if (connected) {
@@ -179,7 +186,7 @@
 		}
 
 		const action = (key: string, label: string, icon: typeof TableIcon, run: () => void) =>
-			all.push({ key: `action:${key}`, label, kind: 'Action', icon, run });
+			all.push({ key: `action:${key}`, label, kind: 'Action', hint: 'Run', icon, run });
 		action('new-query', 'New query', SquareTerminalIcon, onNewQuery);
 		action('new-connection', 'New connection', PlugIcon, onNewConnection);
 		action('filter', 'Filter connections', ListFilterIcon, onFilterConnections);
@@ -196,14 +203,24 @@
 	});
 
 	const results = $derived(
-		query.trim()
-			? fuzzyFilter(items, query, (i) => `${i.label} ${i.detail ?? ''}`).slice(0, MAX_ITEMS)
-			: // Without a query: tabs, connections and actions first, tables are a search away.
-				[
-					...items.filter((i) => i.kind !== 'Table' && i.kind !== 'Diagram'),
-					...items.filter((i) => i.kind === 'Table')
-				].slice(0, MAX_ITEMS)
+		groupByKind(
+			query.trim()
+				? fuzzyFilter(items, query, (i) => `${i.label} ${i.detail ?? ''}`).slice(0, MAX_ITEMS)
+				: // Without a query: tabs, connections and actions first, tables are a search away.
+					[
+						...items.filter((i) => i.kind !== 'Table' && i.kind !== 'Diagram'),
+						...items.filter((i) => i.kind === 'Table')
+					].slice(0, MAX_ITEMS)
+		)
 	);
+
+	const GROUP_TITLES: Record<string, string> = {
+		Tab: 'Open tabs',
+		Table: 'Tables',
+		Diagram: 'Diagrams',
+		Connection: 'Connections',
+		Action: 'Actions'
+	};
 
 	$effect(() => {
 		void query;
@@ -236,36 +253,51 @@
 
 <Dialog.Root bind:open>
 	<Dialog.Content
-		class="top-[15%] translate-y-0 gap-0 overflow-hidden p-0 sm:max-w-xl"
+		class="palette top-[15%] translate-y-0 gap-0 overflow-hidden p-0 sm:max-w-xl"
 		showCloseButton={false}
 	>
 		<Dialog.Title class="sr-only">Command palette</Dialog.Title>
-		<div class="flex items-center gap-2 border-b px-3">
+		<div class="flex items-center gap-3 border-b px-4">
 			<SearchIcon class="size-4 shrink-0 text-muted-foreground" />
 			<!-- svelte-ignore a11y_autofocus -->
 			<input
 				bind:value={query}
 				autofocus
-				placeholder="Search tables, tabs, connections and actions…"
+				data-palette-input
+				aria-label="Search"
+				placeholder="Search tables, tabs, connections…"
 				spellcheck="false"
 				autocomplete="off"
-				class="h-11 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+				class="h-12 min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground"
 				onkeydown={onKeydown}
 			/>
 			{#if loading > 0}
 				<LoaderIcon class="size-4 shrink-0 animate-spin text-muted-foreground" />
 			{/if}
 		</div>
-		<div bind:this={list} class="max-h-[min(60vh,26rem)] overflow-y-auto p-1.5" role="listbox">
+		<div
+			bind:this={list}
+			class="max-h-[min(60vh,26rem)] scroll-py-8 overflow-y-auto px-1.5 pb-1.5"
+			role="listbox"
+			aria-label="Results"
+		>
 			{#each results as item, index (item.key)}
 				{@const Icon = item.icon}
+				{@const active = index === selected}
+				{#if index === 0 || results[index - 1].kind !== item.kind}
+					<div
+						class="px-2.5 pt-3 pb-1 text-xs font-medium text-muted-foreground"
+						role="presentation"
+					>
+						{GROUP_TITLES[item.kind] ?? item.kind}
+					</div>
+				{/if}
 				<button
 					type="button"
 					role="option"
-					aria-selected={index === selected}
+					aria-selected={active}
 					data-index={index}
-					class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] {index ===
-					selected
+					class="palette-item flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] {active
 						? 'bg-hover text-foreground'
 						: 'text-ink-2'}"
 					onmousemove={() => (selected = index)}
@@ -275,22 +307,28 @@
 						class="size-4 shrink-0 text-muted-foreground"
 						style={item.color ? `color: ${item.color}` : ''}
 					/>
-					<span class="min-w-0 truncate">{item.label}</span>
+					<span class="min-w-0 shrink truncate">{item.label}</span>
 					{#if item.detail}
-						<span class="min-w-0 truncate text-xs text-muted-foreground">{item.detail}</span>
+						<span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">{item.detail}</span>
+					{:else}
+						<span class="flex-1"></span>
 					{/if}
-					<span class="ml-auto shrink-0 text-xs text-muted-foreground">
-						{item.kind}
-					</span>
+					{#if active && item.hint}
+						<span class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+							{item.hint}<kbd class="key">↵</kbd>
+						</span>
+					{/if}
 				</button>
 			{:else}
-				<p class="px-3 py-8 text-center text-[13px] text-muted-foreground">
+				<p class="px-3 py-10 text-center text-[13px] text-muted-foreground">
 					{loading > 0 ? 'Loading tables…' : `Nothing matches “${query}”.`}
 				</p>
 			{/each}
 		</div>
-		<div class="flex items-center gap-4 border-t bg-chrome px-3 py-2 text-xs text-muted-foreground">
-			<span class="flex items-center gap-1.5"><kbd class="key">↑↓</kbd> navigate</span>
+		<div class="flex items-center gap-4 border-t px-4 py-2 text-xs text-muted-foreground">
+			<span class="flex items-center gap-1.5"
+				><kbd class="key">↑</kbd><kbd class="key">↓</kbd> navigate</span
+			>
 			<span class="flex items-center gap-1.5"><kbd class="key">↵</kbd> open</span>
 			<span class="flex items-center gap-1.5"><kbd class="key">esc</kbd> close</span>
 		</div>

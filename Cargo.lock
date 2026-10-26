@@ -1957,6 +1957,7 @@ dependencies = [
  "futures-util",
  "keyring",
  "log",
+ "postgres-protocol",
  "reqwest",
  "russh",
  "rustls",

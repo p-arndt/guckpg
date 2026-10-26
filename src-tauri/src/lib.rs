@@ -7,6 +7,7 @@ mod error;
 #[cfg(test)]
 mod it;
 mod pg;
+mod roles;
 mod session;
 mod sql;
 mod ssh;
@@ -69,6 +70,11 @@ pub fn run() {
             structure::table_structure,
             structure::preview_structure,
             structure::apply_structure,
+            roles::role_details,
+            roles::role_privileges,
+            roles::preview_role_changes,
+            roles::apply_role_changes,
+            roles::drop_role,
         ])
         .run(tauri::generate_context!())
         .expect("error while running guckpg");

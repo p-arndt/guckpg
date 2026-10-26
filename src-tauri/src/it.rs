@@ -631,3 +631,110 @@ async fn applies_changes_in_one_transaction() {
     );
     conn.run("SELECT 1", 10).await.unwrap();
 }
+
+#[tokio::test]
+async fn inspects_and_edits_roles() {
+    let Some(conn) = direct().await else { return };
+    let c = &conn.client;
+    c.batch_execute(
+        "DROP TABLE IF EXISTS it_role_t; DROP ROLE IF EXISTS it_role_app, it_role_web, it_role_readers;
+         CREATE ROLE it_role_readers NOLOGIN;
+         CREATE ROLE it_role_app LOGIN CONNECTION LIMIT 3;
+         CREATE TABLE it_role_t (id int);
+         GRANT SELECT ON it_role_t TO it_role_readers;
+         GRANT it_role_readers TO it_role_app;",
+    )
+    .await
+    .unwrap();
+
+    let details =
+        serde_json::to_value(crate::roles::details(c, "it_role_app").await.unwrap()).unwrap();
+    assert_eq!(details["canLogin"], true);
+    assert_eq!(details["connectionLimit"], 3);
+    assert_eq!(details["validUntil"], serde_json::Value::Null);
+    assert_eq!(details["memberOf"][0]["role"], "it_role_readers");
+    let db = env("POSTGRES_DB").unwrap();
+    let own_db = details["databases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["name"] == db.as_str())
+        .unwrap();
+    // CONNECT comes from PUBLIC, not from a direct grant.
+    assert!(
+        own_db["effective"]
+            .as_array()
+            .unwrap()
+            .contains(&"CONNECT".into())
+    );
+    assert!(own_db["granted"].as_array().unwrap().is_empty());
+
+    let privileges =
+        serde_json::to_value(crate::roles::privileges(c, "it_role_app").await.unwrap()).unwrap();
+    let table = privileges["relations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "it_role_t")
+        .unwrap()
+        .clone();
+    assert_eq!(table["kind"], "table");
+    assert_eq!(table["granted"], serde_json::json!([]));
+    assert_eq!(table["effective"], serde_json::json!(["SELECT"]));
+
+    let changes = serde_json::from_value(serde_json::json!({
+        "name": "it_role_app",
+        "rename": "it_role_web",
+        "attributes": { "createDb": true, "validUntil": "2099-01-01" },
+        "password": "secret",
+        "comment": "web app",
+        "revokeRoles": ["it_role_readers"],
+        "privileges": [
+            { "target": { "kind": "table", "schema": "public", "name": "it_role_t" }, "privilege": "INSERT", "grant": true },
+        ],
+    }))
+    .unwrap();
+    let statements = crate::roles::plan(&changes, |p| {
+        postgres_protocol::password::scram_sha_256(p.as_bytes())
+    })
+    .unwrap();
+    crate::roles::apply(c, &statements).await.unwrap();
+
+    let details =
+        serde_json::to_value(crate::roles::details(c, "it_role_web").await.unwrap()).unwrap();
+    assert_eq!(details["createDb"], true);
+    assert_eq!(details["comment"], "web app");
+    assert!(
+        details["validUntil"]
+            .as_str()
+            .unwrap()
+            .starts_with("2099-01-01")
+    );
+    assert_eq!(details["memberOf"], serde_json::json!([]));
+    let stored: String = c
+        .query_one(
+            "SELECT rolpassword FROM pg_authid WHERE rolname = 'it_role_web'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(stored.starts_with("SCRAM-SHA-256$"));
+
+    // A failing statement rolls back the earlier ones.
+    let failing = serde_json::from_value(serde_json::json!({
+        "name": "it_role_web",
+        "attributes": { "createDb": false },
+        "grantRoles": ["it_role_missing"],
+    }))
+    .unwrap();
+    let statements = crate::roles::plan(&failing, |p| p.into()).unwrap();
+    assert!(crate::roles::apply(c, &statements).await.is_err());
+    let details =
+        serde_json::to_value(crate::roles::details(c, "it_role_web").await.unwrap()).unwrap();
+    assert_eq!(details["createDb"], true);
+
+    c.batch_execute("DROP TABLE it_role_t; DROP ROLE it_role_web, it_role_readers;")
+        .await
+        .unwrap();
+}

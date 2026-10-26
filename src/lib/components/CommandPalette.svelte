@@ -5,6 +5,7 @@
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import NetworkIcon from '@lucide/svelte/icons/network';
+	import UserIcon from '@lucide/svelte/icons/user';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import HistoryIcon from '@lucide/svelte/icons/history';
 	import SunMoonIcon from '@lucide/svelte/icons/sun-moon';
@@ -108,7 +109,13 @@
 				detail: `${connections.get(t.connectionId)?.name ?? ''} / ${t.database}`,
 				kind: 'Tab',
 				icon:
-					t.kind === 'table' ? TableIcon : t.kind === 'diagram' ? NetworkIcon : SquareTerminalIcon,
+					t.kind === 'table'
+						? TableIcon
+						: t.kind === 'diagram'
+							? NetworkIcon
+							: t.kind === 'role'
+								? UserIcon
+								: SquareTerminalIcon,
 				color: connections.get(t.connectionId)?.color,
 				run: () => {
 					tabs.activeId = t.id;

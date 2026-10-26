@@ -51,6 +51,89 @@ export interface ServerInfo {
 	database: string;
 }
 
+export interface DatabaseRole {
+	name: string;
+	canLogin: boolean;
+	superuser: boolean;
+	createDb: boolean;
+	createRole: boolean;
+}
+
+export interface RoleMembership {
+	role: string;
+	admin: boolean;
+}
+
+export type PrivilegeKind =
+	'database' | 'schema' | 'table' | 'partitioned' | 'view' | 'materialized' | 'foreign' | 'other';
+
+export interface ObjectPrivileges {
+	schema: string | null;
+	name: string;
+	kind: PrivilegeKind;
+	owner: boolean;
+	/** Granted to the role directly. */
+	granted: string[];
+	/** What the role can do, including ownership, PUBLIC and memberships. */
+	effective: string[];
+}
+
+export interface RoleDetails {
+	name: string;
+	canLogin: boolean;
+	superuser: boolean;
+	createDb: boolean;
+	createRole: boolean;
+	inherit: boolean;
+	replication: boolean;
+	bypassRls: boolean;
+	/** -1 means unlimited. */
+	connectionLimit: number;
+	/** null means the password never expires. */
+	validUntil: string | null;
+	comment: string | null;
+	memberOf: RoleMembership[];
+	members: RoleMembership[];
+	databases: ObjectPrivileges[];
+	otherRoles: string[];
+}
+
+export interface RolePrivileges {
+	schemas: ObjectPrivileges[];
+	relations: ObjectPrivileges[];
+}
+
+export type PrivilegeTarget =
+	| { kind: 'database'; name: string }
+	| { kind: 'schema'; name: string }
+	| { kind: 'table'; schema: string; name: string };
+
+export interface RoleAttributeChanges {
+	canLogin?: boolean;
+	superuser?: boolean;
+	createDb?: boolean;
+	createRole?: boolean;
+	inherit?: boolean;
+	replication?: boolean;
+	bypassRls?: boolean;
+	connectionLimit?: number;
+	/** null removes the expiry. */
+	validUntil?: string | null;
+}
+
+export interface RoleChanges {
+	name: string;
+	rename?: string;
+	attributes?: RoleAttributeChanges;
+	password?: string;
+	removePassword?: boolean;
+	/** null removes the comment. */
+	comment?: string | null;
+	grantRoles?: string[];
+	revokeRoles?: string[];
+	privileges?: { target: PrivilegeTarget; privilege: string; grant: boolean }[];
+}
+
 export type RelationKind = 'table' | 'partitioned' | 'view' | 'materialized' | 'foreign' | 'other';
 
 export interface Relation {
@@ -213,6 +296,23 @@ export const api = {
 	connect: (id: string) => invoke<ServerInfo>('connect', { id }),
 	disconnect: (id: string) => invoke<void>('disconnect', { id }),
 	listDatabases: (id: string) => invoke<string[]>('list_databases', { id }),
+	listRoles: (id: string) => invoke<DatabaseRole[]>('list_roles', { id }),
+	createRole: (
+		id: string,
+		name: string,
+		password: string | null,
+		login: boolean,
+		createDb: boolean,
+		createRole: boolean
+	) => invoke<void>('create_role', { id, name, password, login, createDb, createRole }),
+	roleDetails: (id: string, name: string) => invoke<RoleDetails>('role_details', { id, name }),
+	rolePrivileges: (id: string, database: string, name: string) =>
+		invoke<RolePrivileges>('role_privileges', { id, database, name }),
+	previewRoleChanges: (changes: RoleChanges) =>
+		invoke<string[]>('preview_role_changes', { changes }),
+	applyRoleChanges: (id: string, database: string, changes: RoleChanges) =>
+		invoke<void>('apply_role_changes', { id, database, changes }),
+	dropRole: (id: string, name: string) => invoke<void>('drop_role', { id, name }),
 	listSchemas: (id: string, database: string, includeSystem = false) =>
 		invoke<string[]>('list_schemas', { id, database, includeSystem }),
 	listRelations: (id: string, database: string, schema: string) =>

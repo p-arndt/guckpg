@@ -22,6 +22,7 @@
 	import QueryTabView from '#lib/components/QueryTabView.svelte';
 	import TableTabView from '#lib/components/TableTabView.svelte';
 	import ErDiagramView from '#lib/components/er/ErDiagramView.svelte';
+	import RoleTabView from '#lib/components/RoleTabView.svelte';
 
 	let aiOpen = $state(false);
 	let aiPane = $state<ReturnType<typeof Resizable.Pane> | null>(null);
@@ -177,6 +178,8 @@
 									<QueryTabView {tab} />
 								{:else if tab.kind === 'table'}
 									<TableTabView {tab} />
+								{:else if tab.kind === 'role'}
+									<RoleTabView {tab} />
 								{:else}
 									<ErDiagramView {tab} />
 								{/if}

@@ -73,7 +73,18 @@ export class DiagramTab extends TabBase {
 	}
 }
 
-export type Tab = QueryTab | TableTab | DiagramTab;
+export class RoleTab extends TabBase {
+	readonly kind = 'role';
+	role = $state('');
+
+	/** `database` is where schema and table privileges are shown. */
+	constructor(connectionId: string, database: string, role: string) {
+		super(newId(), role, connectionId, database);
+		this.role = role;
+	}
+}
+
+export type Tab = QueryTab | TableTab | DiagramTab | RoleTab;
 
 /** What survives a restart: open query tabs with their text. */
 interface SavedTab {
@@ -88,7 +99,8 @@ interface SavedTab {
 export type ClosedTab =
 	| { kind: 'query'; title: string; connectionId: string; database: string; sql: string }
 	| { kind: 'table'; connectionId: string; database: string; schema: string; table: string }
-	| { kind: 'diagram'; connectionId: string; database: string; schema: string };
+	| { kind: 'diagram'; connectionId: string; database: string; schema: string }
+	| { kind: 'role'; connectionId: string; database: string; role: string };
 
 const STORAGE_KEY = 'guckpg.tabs';
 const MAX_CLOSED = 20;
@@ -102,6 +114,8 @@ function describe(tab: Tab): ClosedTab {
 			return { kind: 'table', connectionId, database, schema: tab.schema, table: tab.table };
 		case 'diagram':
 			return { kind: 'diagram', connectionId, database, schema: tab.schema };
+		case 'role':
+			return { kind: 'role', connectionId, database, role: tab.role };
 	}
 }
 
@@ -161,6 +175,29 @@ class Tabs {
 		const tab = new DiagramTab(connectionId, database, schema);
 		this.items.push(tab);
 		this.activeId = tab.id;
+	}
+
+	openRole(connectionId: string, database: string, role: string): RoleTab {
+		const existing = this.items.find(
+			(t): t is RoleTab => t.kind === 'role' && t.connectionId === connectionId && t.role === role
+		);
+		if (existing) {
+			this.activeId = existing.id;
+			return existing;
+		}
+		const tab = new RoleTab(connectionId, database, role);
+		this.items.push(tab);
+		this.activeId = tab.id;
+		return tab;
+	}
+
+	/** Close the tabs of a role that no longer exists. */
+	closeRole(connectionId: string, role: string) {
+		for (const t of this.items.filter(
+			(t) => t.kind === 'role' && t.connectionId === connectionId && t.role === role
+		)) {
+			this.close(t.id, false);
+		}
 	}
 
 	/**
@@ -241,6 +278,8 @@ class Tabs {
 				tab.title = c.title;
 			} else if (c.kind === 'table') {
 				this.openTable(c.connectionId, c.database, c.schema, c.table);
+			} else if (c.kind === 'role') {
+				this.openRole(c.connectionId, c.database, c.role);
 			} else {
 				this.openDiagram(c.connectionId, c.database, c.schema);
 			}

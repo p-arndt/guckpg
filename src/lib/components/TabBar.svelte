@@ -4,6 +4,7 @@
 	import TableIcon from '@lucide/svelte/icons/table-2';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import NetworkIcon from '@lucide/svelte/icons/network';
+	import UserIcon from '@lucide/svelte/icons/user';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import { tick } from 'svelte';
 	import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
@@ -146,6 +147,8 @@
 									<LoaderIcon class="size-3.5 shrink-0 animate-spin text-cool" />
 								{:else if tab.kind === 'table'}
 									<TableIcon class="size-3.5 shrink-0" style={color ? `color: ${color}` : ''} />
+								{:else if tab.kind === 'role'}
+									<UserIcon class="size-3.5 shrink-0" style={color ? `color: ${color}` : ''} />
 								{:else if tab.kind === 'diagram'}
 									<NetworkIcon class="size-3.5 shrink-0" style={color ? `color: ${color}` : ''} />
 								{:else}

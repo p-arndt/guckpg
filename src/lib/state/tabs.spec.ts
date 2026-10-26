@@ -243,4 +243,29 @@ describe('Tabs', () => {
 		tabs.closeForConnection('c1');
 		expect(tabs.closed).toEqual([]);
 	});
+
+	it('opens one tab per role and reopens it after closing', () => {
+		const tabs = new Tabs();
+		const role = tabs.openRole('c1', 'db', 'app');
+		tabs.openQuery('c1', 'db');
+		expect(tabs.openRole('c1', 'other', 'app')).toBe(role);
+		tabs.openRole('c2', 'db', 'app');
+		expect(tabs.items.map((t) => [t.kind, t.title, t.connectionId])).toEqual([
+			['role', 'app', 'c1'],
+			['query', 'Query 1', 'c1'],
+			['role', 'app', 'c2']
+		]);
+		tabs.close(role.id);
+		expect(tabs.reopenClosed()).toBe(true);
+		expect(tabs.active).toMatchObject({ kind: 'role', role: 'app', database: 'db' });
+	});
+
+	it('closes the tabs of a dropped role without offering to reopen them', () => {
+		const tabs = new Tabs();
+		tabs.openRole('c1', 'db', 'app');
+		tabs.openRole('c1', 'db', 'web');
+		tabs.closeRole('c1', 'app');
+		expect(tabs.items.map((t) => t.title)).toEqual(['web']);
+		expect(tabs.closed).toEqual([]);
+	});
 });

@@ -163,3 +163,14 @@ export function cellText(v: string): string {
 	const capped = line.length > CELL_TEXT_MAX ? line.slice(0, CELL_TEXT_MAX) : line;
 	return capped.length < v.length ? capped + ' …' : capped;
 }
+
+/** The rows from one picked row to another, inclusive, in order. */
+export function rowSpan(a: number, b: number): { start: number; end: number } {
+	return { start: Math.min(a, b), end: Math.max(a, b) };
+}
+
+/** The row under a y offset in the scrolled content (header included), clamped to the rows. */
+export function rowAt(contentY: number, headerPx: number, rowPx: number, total: number): number {
+	const row = Math.floor((contentY - headerPx) / rowPx);
+	return Math.min(Math.max(0, total - 1), Math.max(0, row));
+}

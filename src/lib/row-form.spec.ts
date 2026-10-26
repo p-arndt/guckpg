@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { formattedJson, rowChanges, type RowField } from './row-form.js';
+import {
+	clampPanelWidth,
+	fieldKind,
+	formattedJson,
+	isFieldEdit,
+	ROW_PANEL_DEFAULT_PX,
+	ROW_PANEL_MIN_PX,
+	rowChanges,
+	sameJson,
+	type RowField
+} from './row-form.js';
 import { GridEdits, buildChanges } from './state/edits.svelte.js';
 
 const fields: RowField[] = [
@@ -73,5 +83,56 @@ describe('row form', () => {
 		expect(formattedJson(formatted)).toBe(formatted);
 		expect(formattedJson('not JSON')).toBeNull();
 		expect(formattedJson('[]')).toBe('[]');
+	});
+});
+
+describe('fieldKind', () => {
+	it('picks an editor by column type and value', () => {
+		expect(fieldKind('jsonb', '{"a": 1}')).toBe('json');
+		expect(fieldKind('boolean', 'true')).toBe('bool');
+		expect(fieldKind('integer', '102')).toBe('line');
+		expect(fieldKind('text', 'short')).toBe('line');
+		expect(fieldKind('text', 'a\nb')).toBe('multiline');
+		expect(fieldKind('text', 'x'.repeat(81))).toBe('multiline');
+	});
+});
+
+describe('sameJson', () => {
+	it('ignores whitespace but not content', () => {
+		expect(sameJson('{"a":1,"b":[1,2]}', '{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ]\n}')).toBe(
+			true
+		);
+		expect(sameJson('{"a":1}', '{"a":2}')).toBe(false);
+		expect(sameJson('not json', 'not json')).toBe(false);
+		expect(sameJson(null, null)).toBe(true);
+		expect(sameJson(null, '{}')).toBe(false);
+	});
+
+	it('does not count a pretty-printed json field as a change', () => {
+		const json: RowField[] = [
+			{ name: 'dims', type: 'jsonb', value: '{"w":1}', editable: true, primaryKey: false }
+		];
+		expect(rowChanges(json, ['{\n  "w": 1\n}'], false)).toEqual([]);
+		expect(rowChanges(json, ['{"w": 2}'], false)).toEqual([{ column: 0, value: '{"w": 2}' }]);
+	});
+});
+
+describe('isFieldEdit', () => {
+	it('skips read-only fields, unchanged values and DEFAULT on loaded rows', () => {
+		expect(isFieldEdit(fields[1], 'New', false)).toBe(true);
+		expect(isFieldEdit(fields[1], 'Original', false)).toBe(false);
+		expect(isFieldEdit(fields[2], 'changed', false)).toBe(false);
+		expect(isFieldEdit(fields[1], undefined, false)).toBe(false);
+		expect(isFieldEdit(fields[1], null, false)).toBe(true);
+	});
+});
+
+describe('clampPanelWidth', () => {
+	it('keeps the panel between the minimum and 70% of the space', () => {
+		expect(clampPanelWidth(420, 1400)).toBe(420);
+		expect(clampPanelWidth(100, 1400)).toBe(ROW_PANEL_MIN_PX);
+		expect(clampPanelWidth(5000, 1000)).toBe(700);
+		expect(clampPanelWidth(500, 200)).toBe(ROW_PANEL_MIN_PX);
+		expect(clampPanelWidth(Number.NaN, 1400)).toBe(ROW_PANEL_DEFAULT_PX);
 	});
 });

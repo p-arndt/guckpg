@@ -2,6 +2,8 @@
 	export interface Viewing {
 		column: string;
 		value: string | null;
+		/** Column type, when known; json columns get the JSON editor. */
+		type?: string;
 		/** Present when the value may be changed. */
 		save?: (value: string | null) => void;
 	}
@@ -11,6 +13,9 @@
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { toast } from 'svelte-sonner';
+	import { isJsonType } from '#lib/highlight.js';
+	import { formattedJson } from '#lib/row-form.js';
+	import JsonEditor from './JsonEditor.svelte';
 
 	interface Props {
 		viewing: Viewing | null;
@@ -22,16 +27,19 @@
 
 	/** JSON gets pretty-printed when only reading it. */
 	function pretty(v: string): string {
-		const trimmed = v.trimStart();
-		if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-			try {
-				return JSON.stringify(JSON.parse(v), null, 2);
-			} catch {
-				return v;
-			}
-		}
-		return v;
+		return formattedJson(v) ?? v;
 	}
+
+	function looksLikeJson(v: string): boolean {
+		const trimmed = v.trimStart();
+		return (trimmed.startsWith('{') || trimmed.startsWith('[')) && formattedJson(v) !== null;
+	}
+
+	const isJson = $derived(
+		viewing !== null &&
+			viewing.value !== null &&
+			(isJsonType(viewing.type) || (!viewing.type && looksLikeJson(viewing.value)))
+	);
 
 	// Editing keeps the exact text: reformatting would turn into a change.
 	$effect(() => {
@@ -59,7 +67,18 @@
 				{viewing?.value === null ? 'NULL' : `${viewing?.value.length ?? 0} characters`}
 			</Dialog.Description>
 		</Dialog.Header>
-		{#if viewing?.save}
+		{#if isJson}
+			<JsonEditor
+				value={draft}
+				label="Value"
+				readonly={!viewing?.save}
+				maxHeight="60vh"
+				onchange={(next) => (draft = next)}
+				onkeydown={(e) => {
+					if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && viewing?.save) save(draft);
+				}}
+			/>
+		{:else if viewing?.save}
 			<textarea
 				bind:value={draft}
 				spellcheck={false}
@@ -83,6 +102,17 @@
 				Copy
 			</Button>
 			{#if viewing?.save}
+				{#if isJson}
+					<Button
+						variant="ghost"
+						class="mr-auto"
+						onclick={() => {
+							const result = formattedJson(draft);
+							if (result === null) toast.error('This value is not valid JSON');
+							else draft = result;
+						}}>Format JSON</Button
+					>
+				{/if}
 				<Button variant="outline" onclick={() => save(null)}>Set NULL</Button>
 				<Button onclick={() => save(draft)}
 					>Apply <span class="measured opacity-70">⌘↵</span></Button

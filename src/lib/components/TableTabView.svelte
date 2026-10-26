@@ -260,9 +260,9 @@
 					aria-busy="true"
 					aria-label="Loading rows"
 				>
-					<div class="h-[30px] border-b bg-grid-head"></div>
+					<div class="h-[32px] border-b"></div>
 					{#each { length: 12 }, i (i)}
-						<div class="border-rule/70 flex h-[26px] items-center gap-6 border-b px-3">
+						<div class="border-rule/50 flex h-[28px] items-center gap-6 border-b px-3">
 							<span class="h-2 w-6 rounded-sm bg-hover"></span>
 							<span class="h-2 rounded-sm bg-hover" style:width="{90 + ((i * 37) % 70)}px"></span>
 							<span class="h-2 rounded-sm bg-hover" style:width="{140 + ((i * 53) % 90)}px"></span>

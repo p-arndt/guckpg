@@ -1,4 +1,6 @@
 import { PostgreSQL } from '@codemirror/lang-sql';
+import { jsonLanguage } from '@codemirror/lang-json';
+type Parser = typeof jsonLanguage.parser;
 import { classHighlighter, highlightCode } from '@lezer/highlight';
 
 export interface Token {
@@ -7,12 +9,11 @@ export interface Token {
 	classes: string;
 }
 
-/** Highlighted SQL as plain tokens, so callers render text nodes and never HTML. */
-export function highlightSql(code: string): Token[] {
+function highlight(code: string, parser: Parser): Token[] {
 	const tokens: Token[] = [];
 	highlightCode(
 		code,
-		PostgreSQL.language.parser.parse(code),
+		parser.parse(code),
 		classHighlighter,
 		(text, classes) => {
 			const last = tokens.at(-1);
@@ -26,4 +27,19 @@ export function highlightSql(code: string): Token[] {
 		}
 	);
 	return tokens;
+}
+
+/** Highlighted SQL as plain tokens, so callers render text nodes and never HTML. */
+export function highlightSql(code: string): Token[] {
+	return highlight(code, PostgreSQL.language.parser);
+}
+
+/** Highlighted JSON as plain tokens; cut-off or broken JSON still highlights what it can. */
+export function highlightJson(code: string): Token[] {
+	return highlight(code, jsonLanguage.parser);
+}
+
+/** json and jsonb columns, including arrays of them. */
+export function isJsonType(type: string | undefined): boolean {
+	return /^jsonb?(\[\])?$/i.test(type?.trim() ?? '');
 }

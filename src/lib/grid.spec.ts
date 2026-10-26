@@ -8,6 +8,8 @@ import {
 	columnWidths,
 	isNumeric,
 	parseTsv,
+	rowAt,
+	rowSpan,
 	sortOrder,
 	toTsv,
 	visibleColumns,
@@ -150,5 +152,27 @@ describe('cellText', () => {
 	it('caps very long values', () => {
 		const text = cellText('x'.repeat(CELL_TEXT_MAX * 10));
 		expect(text).toBe('x'.repeat(CELL_TEXT_MAX) + ' …');
+	});
+});
+
+describe('rowSpan', () => {
+	it('orders the ends whichever way the drag went', () => {
+		expect(rowSpan(2, 5)).toEqual({ start: 2, end: 5 });
+		expect(rowSpan(5, 2)).toEqual({ start: 2, end: 5 });
+		expect(rowSpan(3, 3)).toEqual({ start: 3, end: 3 });
+	});
+});
+
+describe('rowAt', () => {
+	it('maps a y offset below the header to a row', () => {
+		expect(rowAt(32, 32, 28, 10)).toBe(0);
+		expect(rowAt(32 + 28 * 3 + 5, 32, 28, 10)).toBe(3);
+	});
+
+	it('clamps above the first and below the last row', () => {
+		expect(rowAt(0, 32, 28, 10)).toBe(0);
+		expect(rowAt(-50, 32, 28, 10)).toBe(0);
+		expect(rowAt(10_000, 32, 28, 10)).toBe(9);
+		expect(rowAt(100, 32, 28, 0)).toBe(0);
 	});
 });

@@ -1,9 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import {
 	buildRequest,
+	changeStatus,
+	checkExpression,
+	columnRenames,
+	defaultPresets,
 	destructive,
+	matchReferences,
+	namedStatus,
+	removedItems,
 	renameDraftColumn,
 	renameReferences,
+	restoreColumn,
+	restored,
+	suggestName,
+	supportsIdentity,
+	toggleForeignKeyColumn,
+	togglePrimaryKey,
+	type StructureConstraint,
 	type TableStructure
 } from './structure.js';
 
@@ -142,5 +156,95 @@ describe('structure change queue', () => {
 		const changes = buildRequest('public', null, original).changes;
 		expect(changes.map((c) => c.op)).toEqual(['createTable', 'addConstraint']);
 		expect(destructive(changes)).toBe(false);
+	});
+});
+
+describe('designer helpers', () => {
+	it('marks altered and dropped objects from the request', () => {
+		const source = structuredClone(original);
+		source.columns.push({ ...source.columns[0], name: 'other' });
+		const draft = structuredClone(source);
+		draft.columns[0].comment = 'changed';
+		draft.columns.pop();
+		draft.constraints[0].columns = [];
+		const status = changeStatus(buildRequest('public', source, draft, ['id']));
+		expect([...status.alteredColumns]).toEqual(['id']);
+		expect(status.droppedColumns).toEqual(['other']);
+		expect(status.droppedConstraints).toEqual(['items_key']);
+		expect(namedStatus('items_key', source.constraints, status.addedConstraints)).toBe('changed');
+		expect(namedStatus('fresh', source.constraints, status.addedConstraints)).toBe('new');
+		expect(removedItems(source.constraints, draft.constraints, status.droppedConstraints)).toEqual(
+			[]
+		);
+		draft.constraints = [];
+		expect(
+			removedItems(source.constraints, draft.constraints, ['items_key']).map((c) => c.name)
+		).toEqual(['items_key']);
+	});
+	it('toggles columns in and out of the primary key', () => {
+		const draft = structuredClone(original);
+		draft.constraints = [];
+		draft.columns[0].nullable = true;
+		togglePrimaryKey(draft, draft.columns[0]);
+		expect(draft.constraints).toMatchObject([
+			{ name: 'items_pkey', kind: 'primaryKey', columns: ['id'] }
+		]);
+		expect(draft.columns[0].nullable).toBe(false);
+		togglePrimaryKey(draft, draft.columns[0]);
+		expect(draft.constraints).toEqual([]);
+	});
+	it('suggests unique postgres-style names', () => {
+		const draft = structuredClone(original);
+		draft.constraints[0].name = 'items_id_key';
+		expect(suggestName(draft, 'unique', ['id'])).toBe('items_id_key1');
+		expect(suggestName(draft, 'unique', ['id'], draft.constraints[0])).toBe('items_id_key');
+		expect(suggestName(draft, 'index', ['a', 'b'])).toBe('items_a_b_idx');
+		expect(suggestName({ ...draft, name: '' }, 'primaryKey', ['id'])).toBe('table_pkey');
+	});
+	it('offers identity and defaults that fit the type', () => {
+		expect(supportsIdentity('bigint')).toBe(true);
+		expect(supportsIdentity('text')).toBe(false);
+		expect(defaultPresets('uuid').map((p) => p.value)).toEqual(['gen_random_uuid()', null]);
+		expect(defaultPresets('timestamp with time zone')[0].value).toBe('CURRENT_TIMESTAMP');
+		expect(defaultPresets('boolean').map((p) => p.value)).toEqual(['true', 'false', null]);
+		expect(defaultPresets('geometry')).toEqual([{ label: 'No default', value: null }]);
+	});
+	it('restores dropped columns in place and follows renames for constraints', () => {
+		const source = structuredClone(original);
+		source.columns.push({ ...source.columns[0], name: 'other' });
+		const draft = structuredClone(source);
+		const names: (string | null)[] = ['id', 'other'];
+		draft.columns.shift();
+		names.shift();
+		restoreColumn(source, draft, names, 'id');
+		expect(draft.columns.map((c) => c.name)).toEqual(['id', 'other']);
+		expect(names).toEqual(['id', 'other']);
+		expect(() => restoreColumn(source, draft, names, 'id')).toThrow('already exists');
+		draft.columns[0].name = 'item_id';
+		expect(restored(source.constraints[0], columnRenames(draft, names)).columns).toEqual([
+			'item_id'
+		]);
+	});
+	it('keeps foreign key columns paired with referenced columns', () => {
+		const fk: StructureConstraint = {
+			...original.constraints[0],
+			kind: 'foreignKey',
+			columns: [],
+			refColumns: []
+		};
+		const options = [{ name: 'code' }, { name: 'id', primaryKey: true }];
+		toggleForeignKeyColumn(fk, 'owner', options);
+		toggleForeignKeyColumn(fk, 'code', options);
+		expect(fk.columns).toEqual(['owner', 'code']);
+		expect(fk.refColumns).toEqual(['id', 'code']);
+		toggleForeignKeyColumn(fk, 'owner', options);
+		expect(fk.refColumns).toEqual(['code']);
+		expect(matchReferences(['owner', 'code'], options)).toEqual(['id', 'code']);
+		expect(matchReferences(['a', 'b'], options)).toEqual(['id', '']);
+	});
+	it('builds a simple check expression', () => {
+		expect(checkExpression('price', '>=', '0')).toBe('"price" >= 0');
+		expect(checkExpression('state', '<>', "it's")).toBe(`"state" <> 'it''s'`);
+		expect(checkExpression('', '>', '1')).toBeNull();
 	});
 });

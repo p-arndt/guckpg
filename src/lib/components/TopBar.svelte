@@ -1,4 +1,8 @@
 <script lang="ts">
+	import * as Dialog from '#lib/components/ui/dialog/index.js';
+	import BackupDialog from './BackupDialog.svelte';
+	import SchemaCompare from './SchemaCompare.svelte';
+	import SessionMonitor from './SessionMonitor.svelte';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
@@ -47,6 +51,9 @@
 	});
 
 	/** Schemas of the context database, loaded when the menu opens; null while loading. */
+	let backupOpen = $state(false);
+	let compareOpen = $state(false);
+	let sessionsOpen = $state(false);
 	let schemas = $state<string[] | null>(null);
 
 	async function loadSchemas() {
@@ -136,6 +143,13 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 							{/if}
 						</DropdownMenu.SubContent>
 					</DropdownMenu.Sub>
+					<DropdownMenu.Item onSelect={() => (backupOpen = true)}
+						>Backup and restore</DropdownMenu.Item
+					>
+					<DropdownMenu.Item onSelect={() => (compareOpen = true)}
+						>Compare schemas</DropdownMenu.Item
+					>
+					<DropdownMenu.Item onSelect={() => (sessionsOpen = true)}>Sessions</DropdownMenu.Item>
 					<DropdownMenu.Separator />
 					<DropdownMenu.Item onSelect={refresh}>
 						<RefreshCwIcon /> Reload schema
@@ -191,3 +205,24 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 		</Tooltip.Root>
 	</div>
 </header>
+
+{#if context}
+	<BackupDialog bind:open={backupOpen} id={context.connection.id} database={context.database} />
+	<SchemaCompare
+		bind:open={compareOpen}
+		sourceId={context.connection.id}
+		sourceDatabase={context.database}
+	/>
+	<Dialog.Root bind:open={sessionsOpen}
+		><Dialog.Content class="h-[70vh] sm:max-w-5xl"
+			><Dialog.Header
+				><Dialog.Title>Server sessions</Dialog.Title><Dialog.Description
+					>Current database activity.</Dialog.Description
+				></Dialog.Header
+			>{#if sessionsOpen}<SessionMonitor
+					connectionId={context.connection.id}
+					database={context.database}
+				/>{/if}</Dialog.Content
+		></Dialog.Root
+	>
+{/if}

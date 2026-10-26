@@ -1003,6 +1003,8 @@
 			isNew={formItem.kind === 'new'}
 			deleted={formItem.kind === 'row' && Boolean(edits.deleted[formItem.orig])}
 			fields={formFields}
+			{source}
+			{editTarget}
 			onCommit={(col, value) => formRow !== null && commitField(formRow, col, value)}
 			onNavigate={navigateForm}
 			onClose={closeRowForm}

@@ -127,18 +127,33 @@ pub struct SortBy {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct BrowseFilter {
+    pub column: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowseRequest {
     pub schema: String,
     pub table: String,
     #[serde(default)]
     pub sort: Option<SortBy>,
+    #[serde(default)]
+    pub filter: Option<BrowseFilter>,
     pub limit: u32,
     pub offset: u64,
 }
 
 pub fn browse_sql(req: &BrowseRequest) -> String {
     let mut sql = format!("SELECT * FROM {}", qualified(&req.schema, &req.table));
+    if let Some(filter) = &req.filter {
+        sql.push_str(&format!(
+            " WHERE strpos(lower({}::text), lower({})) > 0",
+            quote_ident(&filter.column),
+            quote_literal(&filter.value)
+        ));
+    }
     if let Some(sort) = &req.sort {
         let dir = match sort.dir {
             SortDir::Asc => "ASC",
@@ -257,6 +272,7 @@ mod tests {
             schema: "public".into(),
             table: "users".into(),
             sort: None,
+            filter: None,
             limit: 100,
             offset: 200,
         };
@@ -275,6 +291,16 @@ mod tests {
         assert_eq!(
             browse_sql(&req),
             r#"SELECT * FROM "app"."Order" ORDER BY "created_at" DESC LIMIT 50 OFFSET 0"#
+        );
+    }
+    #[test]
+    fn browse_filter_quotes_identifiers_and_literal_without_wildcards() {
+        let req: BrowseRequest = serde_json::from_str(
+            r#"{"schema":"public","table":"users","filter":{"column":"name\"x","value":"a'%_\\b"},"limit":10,"offset":0}"#,
+        ).unwrap();
+        assert_eq!(
+            browse_sql(&req),
+            r#"SELECT * FROM "public"."users" WHERE strpos(lower("name""x"::text), lower(E'a''%_\\b')) > 0 LIMIT 10 OFFSET 0"#
         );
     }
 }

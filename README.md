@@ -41,6 +41,18 @@ Download for **macOS** (Apple Silicon / Intel) or **Windows** from [GitHub Relea
 > [!NOTE]
 > Builds are unsigned and macOS builds are not notarized. Your operating system may warn when opening them.
 
+## Database tools
+
+Open a table to import or export CSV (UTF-8, up to 16 MiB). Import maps the header to column names and inserts rows. Export includes the entire table or view.
+
+Use the table filter to search a column across all rows, and the row form to choose values for single-column foreign keys in the same schema. The picker shows up to 100 values; manual entry remains available. The SQL editor shows catalog matches on hover.
+
+**Generate test data** previews an INSERT for 1–1,000 rows before applying it. It generates common types for required columns without defaults; unsupported required types, constraints, existing values, or triggers may prevent insertion.
+
+The connection menu offers schema comparison, session monitoring, and backup/restore. Schema comparison reports relation kinds and column properties; it does not compare constraints, indexes, or object definitions. Backups use local `pg_dump` and `pg_restore`, require direct connectivity, and use custom-format archives. Restore replaces matching objects and requires confirmation; SSH connections are not supported.
+
+In a query tab, **Explain** displays the estimated PostgreSQL plan for the selection or current statement without running the query. Session visibility depends on PostgreSQL permissions.
+
 ## AI assistant
 
 Configure a model with function calling under **AI → Settings**:

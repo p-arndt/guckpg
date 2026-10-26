@@ -223,6 +223,7 @@ export interface BrowseRequest {
 	schema: string;
 	table: string;
 	sort: { column: string; dir: 'asc' | 'desc' } | null;
+	filter?: { column: string; value: string } | null;
 	limit: number;
 	offset: number;
 }
@@ -336,6 +337,8 @@ export const api = {
 		invoke<Diagram>('schema_diagram', { id, database, schema }),
 	completionTables: (id: string, database: string) =>
 		invoke<CompletionTable[]>('completion_tables', { id, database }),
+	explainQuery: (tabId: string, id: string, database: string, sql: string) =>
+		invoke<QueryOutput>('explain_query', { tabId, id, database, sql }),
 	runQuery: (tabId: string, id: string, database: string, sql: string, maxRows: number) =>
 		invoke<QueryOutput>('run_query', { tabId, id, database, sql, maxRows }),
 	browseTable: (tabId: string, id: string, database: string, request: BrowseRequest) =>

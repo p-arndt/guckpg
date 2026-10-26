@@ -19,6 +19,9 @@
 	import MaximizeIcon from '@lucide/svelte/icons/maximize-2';
 	import MinimizeIcon from '@lucide/svelte/icons/minimize-2';
 	import JsonEditor from './JsonEditor.svelte';
+	import ForeignKeyPicker from './ForeignKeyPicker.svelte';
+	import { api, type ForeignKey, type SourceInfo } from '#lib/api.js';
+	import { singleColumnReferences } from '#lib/foreign-key-picker.js';
 
 	interface Props {
 		/** Identifies the shown row; switching it resets per-row form state. */
@@ -29,6 +32,8 @@
 		isNew: boolean;
 		deleted: boolean;
 		fields: RowField[];
+		source?: SourceInfo | null;
+		editTarget?: { connectionId: string; database: string; readOnly: boolean } | null;
 		onCommit: (column: number, value: NewCell) => void;
 		onNavigate: (delta: number) => void;
 		onClose: () => void;
@@ -43,11 +48,31 @@
 		isNew,
 		deleted,
 		fields,
+		source = null,
+		editTarget = null,
 		onCommit,
 		onNavigate,
 		onClose,
 		onSave
 	}: Props = $props();
+
+	let references = $state<Record<string, ForeignKey>>({});
+	$effect(() => {
+		const currentSource = source;
+		const target = editTarget;
+		references = {};
+		if (!currentSource || !target || target.readOnly) return;
+		let active = true;
+		api
+			.schemaDiagram(target.connectionId, target.database, currentSource.schema)
+			.then((diagram) => {
+				if (active) references = singleColumnReferences(diagram.foreignKeys, currentSource.table);
+			})
+			.catch(() => {});
+		return () => {
+			active = false;
+		};
+	});
 
 	const WIDTH_KEY = 'guckpg.rowPanelWidth';
 	const MAXIMIZED_KEY = 'guckpg.rowPanelMaximized';
@@ -347,6 +372,15 @@
 							onkeydown={(event) => {
 								if (event.key === 'Enter') commit(index, event.currentTarget.value);
 							}}
+						/>
+					{/if}
+					{#if field.editable && source && editTarget && !editTarget.readOnly && source.columns[index] && references[source.columns[index]!]}
+						<ForeignKeyPicker
+							connectionId={editTarget.connectionId}
+							database={editTarget.database}
+							schema={source.schema}
+							reference={references[source.columns[index]!]}
+							onSelect={(next) => commit(index, next)}
 						/>
 					{/if}
 				</div>

@@ -17,6 +17,7 @@
 	import SqlEditor from './SqlEditor.svelte';
 	import QueryBuilder from './builder/QueryBuilder.svelte';
 	import ResultsPanel from './ResultsPanel.svelte';
+	import ExplainPlan from './ExplainPlan.svelte';
 
 	interface Props {
 		tab: QueryTab;
@@ -24,6 +25,7 @@
 
 	let { tab }: Props = $props();
 
+	let plan = $state<string | null>(null);
 	let editor = $state<SqlEditor | null>(null);
 	let databases = $state<string[]>([]);
 	let completion = $state<CompletionTable[]>([]);
@@ -109,6 +111,27 @@
 		await run(text, from);
 	}
 
+	async function explain() {
+		if (tab.running || !editor || !(await confirmDiscard(tab.dirty))) return;
+		const text =
+			tab.builderOpen && builder
+				? buildSql(builder).sql
+				: (editor.selection()?.text ?? statementAt(tab.sql, editor.cursor())?.text);
+		if (!text?.trim()) return;
+		tab.running = true;
+		tab.error = null;
+		plan = null;
+		try {
+			const output = await api.explainQuery(tab.id, tab.connectionId, tab.database, text);
+			plan = output.results[0]?.rows[0]?.[0] ?? '';
+		} catch (e) {
+			tab.output = null;
+			tab.error = isAppError(e) ? e : { kind: 'message', message: errorMessage(e) };
+		} finally {
+			tab.running = false;
+		}
+	}
+
 	async function runBuilt(sql: string) {
 		if (tab.running) return;
 		if (!(await confirmDiscard(tab.dirty))) return;
@@ -123,6 +146,7 @@
 	/** `inEditor` is false for builder SQL, whose error positions do not map onto the editor text. */
 	async function run(text: string, from: number, inEditor = true) {
 		if (!editor) return;
+		plan = null;
 		lastRun = { text, from, inEditor };
 		tab.running = true;
 		tab.error = null;
@@ -194,6 +218,7 @@
 			>
 				<ListFilterIcon /> Query builder
 			</Button>
+			<Button size="sm" variant="ghost" disabled={tab.running} onclick={explain}>Explain</Button>
 			{#if tab.running}
 				<Button size="sm" variant="ghost" class="text-bad" onclick={cancel}>
 					<SquareIcon /> Stop
@@ -272,20 +297,24 @@
 		</Resizable.Pane>
 		<Resizable.Handle />
 		<Resizable.Pane defaultSize={55} minSize={10}>
-			<ResultsPanel
-				running={tab.running}
-				output={tab.output}
-				error={tab.error}
-				editTarget={connection
-					? {
-							connectionId: tab.connectionId,
-							database: tab.database,
-							readOnly: connection.readOnly
-						}
-					: null}
-				onSaved={rerun}
-				onDirtyChange={(n) => (tab.dirty = n)}
-			/>
+			{#if plan !== null}
+				<ExplainPlan value={plan} />
+			{:else}
+				<ResultsPanel
+					running={tab.running}
+					output={tab.output}
+					error={tab.error}
+					editTarget={connection
+						? {
+								connectionId: tab.connectionId,
+								database: tab.database,
+								readOnly: connection.readOnly
+							}
+						: null}
+					onSaved={rerun}
+					onDirtyChange={(n) => (tab.dirty = n)}
+				/>
+			{/if}
 		</Resizable.Pane>
 	</Resizable.PaneGroup>
 </div>

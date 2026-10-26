@@ -1,9 +1,12 @@
 mod ai;
+mod backup;
 mod catalog;
 mod commands;
 mod config;
+mod csv_transfer;
 mod editing;
 mod error;
+mod explain;
 #[cfg(test)]
 mod it;
 mod pg;
@@ -12,6 +15,7 @@ mod session;
 mod sql;
 mod ssh;
 mod structure;
+mod test_data;
 mod vault;
 
 use tauri::Manager as _;
@@ -37,6 +41,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            backup::backup_database,
+            backup::restore_database,
+            csv_transfer::import_csv,
+            csv_transfer::export_csv,
+            explain::explain_query,
+            test_data::preview_test_data,
+            test_data::insert_test_data,
             ai::ai_get_settings,
             ai::ai_ollama_models,
             ai::ai_save_settings,

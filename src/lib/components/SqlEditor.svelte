@@ -1,12 +1,19 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { basicSetup } from 'codemirror';
-	import { EditorView, keymap, Decoration, type DecorationSet } from '@codemirror/view';
+	import {
+		EditorView,
+		keymap,
+		Decoration,
+		hoverTooltip,
+		type DecorationSet
+	} from '@codemirror/view';
 	import { Compartment, EditorState, Prec, StateEffect, StateField } from '@codemirror/state';
 	import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 	import { sql, PostgreSQL, type SQLNamespace } from '@codemirror/lang-sql';
 	import { tags } from '@lezer/highlight';
 	import type { CompletionTable } from '#lib/api.js';
+	import { catalogHover } from '#lib/sql-hover.js';
 
 	interface Props {
 		value: string;
@@ -156,6 +163,20 @@
 					syntaxHighlighting(highlight),
 					theme,
 					errorField,
+					hoverTooltip((editor, pos) => {
+						const hover = catalogHover(editor.state, pos, completion);
+						if (!hover) return null;
+						return {
+							pos: hover.from,
+							end: hover.to,
+							create() {
+								const dom = document.createElement('div');
+								dom.style.padding = '6px 8px';
+								dom.textContent = `Catalog matches: ${hover.matches.slice(0, 5).join(', ')}${hover.matches.length > 5 ? ' …' : ''}`;
+								return { dom };
+							}
+						};
+					}),
 					EditorView.updateListener.of((u) => {
 						if (u.docChanged) value = u.state.doc.toString();
 					})

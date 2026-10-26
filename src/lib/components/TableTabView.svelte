@@ -6,6 +6,7 @@
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+	import { Input } from '#lib/components/ui/input/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
 	import { api, errorMessage, isAppError } from '#lib/api.js';
@@ -15,6 +16,8 @@
 	import { confirmDiscard } from '#lib/state/confirm.svelte.js';
 	import ResultGrid from './ResultGrid.svelte';
 	import TableDesigner from './TableDesigner.svelte';
+	import CsvTransfer from './CsvTransfer.svelte';
+	import TestDataDialog from './TestDataDialog.svelte';
 
 	interface Props {
 		tab: TableTab;
@@ -26,6 +29,10 @@
 	const connection = $derived(connections.get(tab.connectionId));
 	const columnTypes = $derived(Object.fromEntries(tab.columns.map((c) => [c.name, c.dataType])));
 	const primaryKeys = $derived(tab.columns.filter((c) => c.primaryKey).map((c) => c.name));
+	let testDataOpen = $state(false);
+	let filterColumn = $state('');
+	let filterValue = $state('');
+	let appliedFilter = $state<{ column: string; value: string } | null>(null);
 	let gridDirty = $state(0);
 	let structureDirty = $state(0);
 	let structureBusy = $state(false);
@@ -60,6 +67,9 @@
 		tab.table = name;
 		tab.title = tab.schema === 'public' ? name : `${tab.schema}.${name}`;
 		tab.sort = null;
+		filterColumn = '';
+		filterValue = '';
+		appliedFilter = null;
 		tab.offset = 0;
 		tab.output = null;
 		structureDirty = 0;
@@ -80,6 +90,7 @@
 				schema: tab.schema,
 				table: tab.table,
 				sort: tab.sort,
+				filter: appliedFilter,
 				limit: tab.limit,
 				offset: tab.offset
 			});
@@ -116,6 +127,15 @@
 					: null;
 		tab.offset = 0;
 		void load();
+	}
+
+	function applyFilter() {
+		void guarded(() => {
+			appliedFilter =
+				filterColumn && filterValue ? { column: filterColumn, value: filterValue } : null;
+			tab.offset = 0;
+			void load();
+		});
 	}
 
 	function page(delta: number) {
@@ -209,6 +229,21 @@
 				</Select.Content>
 			</Select.Root>
 
+			<Button
+				size="sm"
+				variant="outline"
+				disabled={tab.running || tab.dirty > 0 || (connection?.readOnly ?? true)}
+				onclick={() => (testDataOpen = true)}>Generate test data</Button
+			>
+			<CsvTransfer
+				connectionId={tab.connectionId}
+				database={tab.database}
+				schema={tab.schema}
+				table={tab.table}
+				readOnly={connection?.readOnly ?? true}
+				disabled={tab.running || tab.dirty > 0}
+				onImported={load}
+			/>
 			<code class="ml-3 min-w-0 flex-1 truncate text-xs text-muted-foreground select-text">
 				{tab.lastSql}
 			</code>
@@ -221,6 +256,48 @@
 			</Button>
 		</div>
 
+		<form
+			class="flex shrink-0 items-center gap-2 border-b px-3 py-1"
+			onsubmit={(event) => {
+				event.preventDefault();
+				applyFilter();
+			}}
+		>
+			<label for="filter-column-{tab.id}" class="text-xs text-muted-foreground">Filter</label>
+			<select
+				id="filter-column-{tab.id}"
+				class="h-8 max-w-44 rounded-md border bg-background px-2 text-sm"
+				bind:value={filterColumn}
+				disabled={tab.running}
+			>
+				<option value="">Choose column</option>
+				{#each tab.columns as column (column.name)}<option value={column.name}>{column.name}</option
+					>{/each}
+			</select>
+			<Input
+				class="h-8 max-w-64"
+				aria-label="Filter text"
+				placeholder="Contains (case insensitive)"
+				bind:value={filterValue}
+				disabled={tab.running}
+			/>
+			<Button
+				size="sm"
+				variant="outline"
+				type="submit"
+				disabled={tab.running || (!filterColumn && !!filterValue)}>Apply</Button
+			>
+			{#if appliedFilter}<Button
+					size="sm"
+					variant="ghost"
+					type="button"
+					disabled={tab.running}
+					onclick={() => {
+						filterValue = '';
+						applyFilter();
+					}}>Clear</Button
+				>{/if}
+		</form>
 		<div class="min-h-0 flex-1">
 			{#if tab.error}
 				<div
@@ -305,3 +382,13 @@
 		</div>
 	{/if}
 </div>
+
+<TestDataDialog
+	bind:open={testDataOpen}
+	connectionId={tab.connectionId}
+	database={tab.database}
+	schema={tab.schema}
+	table={tab.table}
+	readOnly={connection?.readOnly ?? true}
+	onInserted={load}
+/>

@@ -109,6 +109,8 @@ pub(super) struct Query {
     #[serde(default)]
     filters: Vec<Filter>,
     #[serde(default)]
+    filter_groups: Vec<Vec<Filter>>,
+    #[serde(default)]
     aggregates: Vec<Aggregate>,
     #[serde(default)]
     group_by: Vec<ColumnRef>,
@@ -140,6 +142,10 @@ pub(super) fn definition() -> Value {
             "column":column,"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","like","is_null","is_not_null"]},
             "value":{"type":["string","null"],"maxLength":1024}
         }))},
+        "filterGroups":{"type":"array","maxItems":16,"items":{"type":"array","minItems":1,"maxItems":16,"items":object(json!({
+            "column":column,"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","like","is_null","is_not_null"]},
+            "value":{"type":["string","null"],"maxLength":1024}
+        }))}},
         "aggregates":{"type":"array","maxItems":32,"items":object(json!({
             "function":{"type":"string","enum":["count","sum","avg","min","max"]},"column":nullable_column
         }))},
@@ -152,7 +158,7 @@ pub(super) fn definition() -> Value {
     }));
     json!({"type":"function","function":{
         "name":"query_rows",
-        "description":"Run a bounded read-only SELECT built from this plan. Inspect columns first. Table references: 0 = base table, 1..3 = joins in order. Join left must refer to an earlier table. Filters combine with AND; values are strings cast to the column type (or null for is_null/is_not_null). Columns are output first, then aggregates; orderBy.field is their zero-based output position. For grouped queries list every selected column in groupBy. count with column:null counts rows. Use empty arrays for unused features. Supports ordinary tables and built-in scalar columns; views, RLS, custom access methods and expression/partial indexes are blocked. Returns at most 100 rows; use aggregates for totals. No raw SQL, writes, arbitrary expressions or functions.",
+        "description":"Run a bounded read-only SELECT built from this plan. Inspect columns first. Table references: 0 = base table, 1..3 = joins in order. Join left must refer to an earlier table. filters combine with AND; filterGroups are OR alternatives, each containing AND filters, and combine with filters using AND. The total number of filters across both is at most 16. Values are strings cast to the column type (or null for is_null/is_not_null). Columns are output first, then aggregates; orderBy.field is their zero-based output position. For grouped queries list every selected column in groupBy. count with column:null counts rows. Select at least one column or aggregate; for total row count use count with column:null. Use empty arrays for unused features. Supports ordinary tables and built-in scalar columns; views, RLS, custom access methods and expression/partial indexes are blocked. Returns at most 100 rows; use aggregates for totals. No raw SQL, writes, arbitrary expressions or functions.",
         "parameters":parameters
     }})
 }
@@ -189,10 +195,16 @@ impl Query {
 
     fn validate(&self) -> AppResult<()> {
         let fields = self.columns.len() + self.aggregates.len();
-        if fields == 0
-            || fields > MAX_COLUMNS
+        if fields == 0 {
+            return Err(rejected(
+                "select at least one column or aggregate; use count with column:null to count rows",
+            ));
+        }
+        if fields > MAX_COLUMNS
             || self.joins.len() > MAX_JOINS
-            || self.filters.len() > MAX_FILTERS
+            || self.filters.len() + self.filter_groups.iter().map(Vec::len).sum::<usize>()
+                > MAX_FILTERS
+            || self.filter_groups.len() > MAX_FILTERS
             || self.group_by.len() > MAX_COLUMNS
             || self.order_by.len() > MAX_COLUMNS
             || self.limit == 0
@@ -200,7 +212,7 @@ impl Query {
             || self.offset > 10_000
         {
             return Err(rejected(
-                "query exceeds column, join, filter or pagination limits",
+                "limits: at most 32 selected columns and aggregates, 3 joins, 16 filters, 32 groups and sorts; limit 1–100, offset 0–10000",
             ));
         }
         for (schema, table) in self.tables() {
@@ -227,7 +239,14 @@ impl Query {
                 return Err(rejected("joins must reference an earlier table"));
             }
         }
-        for filter in &self.filters {
+        if self.filter_groups.iter().any(Vec::is_empty) {
+            return Err(rejected("filter groups must not be empty"));
+        }
+        for filter in self
+            .filters
+            .iter()
+            .chain(self.filter_groups.iter().flatten())
+        {
             check(&filter.column)?;
             let null_check = matches!(filter.op, Operator::IsNull | Operator::IsNotNull);
             if null_check != filter.value.is_none()
@@ -412,16 +431,14 @@ fn compile(query: &Query, tables: &[Columns]) -> AppResult<Compiled> {
     }
     let mut parameters = Vec::new();
     let mut predicates = Vec::new();
-    for filter in &query.filters {
+    let mut compile_filter = |filter: &Filter| -> AppResult<String> {
         let (column, kind) = resolve(&filter.column)?;
         let operator = match filter.op {
             Operator::IsNull => {
-                predicates.push(format!("{column} IS NULL"));
-                continue;
+                return Ok(format!("{column} IS NULL"));
             }
             Operator::IsNotNull => {
-                predicates.push(format!("{column} IS NOT NULL"));
-                continue;
+                return Ok(format!("{column} IS NOT NULL"));
             }
             Operator::Eq => "=",
             Operator::Ne => "<>",
@@ -435,10 +452,27 @@ fn compile(query: &Query, tables: &[Columns]) -> AppResult<Compiled> {
             return Err(rejected("like requires a text column"));
         }
         parameters.push(filter.value.clone().unwrap());
-        predicates.push(format!(
+        Ok(format!(
             "{column} OPERATOR(pg_catalog.{operator}) (${}::pg_catalog.text)::pg_catalog.{kind}",
             parameters.len()
-        ));
+        ))
+    };
+    for filter in &query.filters {
+        predicates.push(compile_filter(filter)?);
+    }
+    if !query.filter_groups.is_empty() {
+        let groups = query
+            .filter_groups
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .map(&mut compile_filter)
+                    .collect::<AppResult<Vec<_>>>()
+                    .map(|parts| format!("({})", parts.join(" AND ")))
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        predicates.push(format!("({})", groups.join(" OR ")));
     }
     if !predicates.is_empty() {
         sql.push_str(&format!(" WHERE {}", predicates.join(" AND ")));
@@ -664,6 +698,53 @@ mod tests {
         assert!(!compiled.sql.contains(injection));
         assert_eq!(compiled.parameters, [injection]);
         assert!(compiled.sql.contains("LIMIT 11 OFFSET 0"));
+    }
+
+    #[test]
+    fn combines_filter_groups_with_bound_parameters() {
+        let mut value = plan();
+        value["filters"] = json!([{"column":{"table":0,"column":"amount"},"op":"gt","value":"10"}]);
+        value["filterGroups"] = json!([
+            [{"column":{"table":0,"column":"status"},"op":"eq","value":"paid"}],
+            [{"column":{"table":0,"column":"status"},"op":"eq","value":"pending"}]
+        ]);
+        let compiled = compile(&Query::parse(&value).unwrap(), &metadata()).unwrap();
+        assert!(
+            compiled
+                .sql
+                .contains(" AND ((t0.\"status\" OPERATOR(pg_catalog.=)")
+        );
+        assert!(
+            compiled
+                .sql
+                .contains(" OR (t0.\"status\" OPERATOR(pg_catalog.=)")
+        );
+        assert_eq!(compiled.parameters, ["10", "paid", "pending"]);
+        value["filterGroups"] = json!([[]]);
+        assert!(Query::parse(&value).is_err());
+    }
+
+    #[test]
+    fn explains_empty_projection_and_limit_errors() {
+        let mut value = plan();
+        value["columns"] = json!([]);
+        value["aggregates"] = json!([]);
+        assert!(
+            Query::parse(&value)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("select at least one column or aggregate")
+        );
+        value["limit"] = json!(101);
+        value["columns"] = json!([{"table":0,"column":"status"}]);
+        assert!(
+            Query::parse(&value)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("limit 1–100")
+        );
     }
 
     #[test]

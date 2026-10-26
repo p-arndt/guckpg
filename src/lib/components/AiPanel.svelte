@@ -24,6 +24,8 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import XIcon from '@lucide/svelte/icons/x';
+	import Maximize2Icon from '@lucide/svelte/icons/maximize-2';
+	import Minimize2Icon from '@lucide/svelte/icons/minimize-2';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import CheckIcon from '@lucide/svelte/icons/check';
@@ -55,6 +57,11 @@
 	];
 
 	let { open, onClose }: { open: boolean; onClose: () => void } = $props();
+	/** Covers the work area for long answers; the side pane stays sized as before. */
+	let expanded = $state(false);
+	$effect(() => {
+		if (!open) expanded = false;
+	});
 	let draft = $state('');
 	let config = $state(defaultAiConfig());
 	let apiKey = $state('');
@@ -560,8 +567,20 @@
 	{#if groups.approvals.length}{@render approvalList(groups.approvals)}{/if}
 {/snippet}
 
+<svelte:window
+	onkeydown={(e) => {
+		if (e.key === 'Escape' && expanded && !e.defaultPrevented) {
+			e.preventDefault();
+			expanded = false;
+		}
+	}}
+/>
+
 <aside
-	class="flex h-full w-full min-w-0 flex-col pl-2 text-sm"
+	class={[
+		'flex min-w-0 flex-col pl-2 text-sm',
+		expanded ? 'fixed inset-x-0 top-12 bottom-0 z-40 bg-chrome pr-2 pb-2' : 'h-full w-full'
+	]}
 	class:hidden={!open}
 	aria-label="AI assistant"
 >
@@ -585,6 +604,15 @@
 				title="New chat"
 				disabled={!ai.messages.length}
 				onclick={() => ai.reset()}><SquarePenIcon /></Button
+			>
+			<Button
+				size="icon-sm"
+				variant="ghost"
+				aria-label={expanded ? 'Exit full screen' : 'Full screen'}
+				title={expanded ? 'Exit full screen (Esc)' : 'Full screen'}
+				aria-pressed={expanded}
+				onclick={() => (expanded = !expanded)}
+				>{#if expanded}<Minimize2Icon />{:else}<Maximize2Icon />{/if}</Button
 			>
 			<Button size="icon-sm" variant="ghost" aria-label="Close AI assistant" onclick={onClose}
 				><XIcon /></Button
@@ -823,7 +851,10 @@
 			<div
 				bind:this={log}
 				onscroll={onLogScroll}
-				class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3"
+				class={[
+					'flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3',
+					expanded && 'px-[max(0.75rem,calc(50%-24rem))] py-6'
+				]}
 				role="log"
 				aria-label="Chat messages"
 				aria-live="polite"
@@ -901,7 +932,7 @@
 				{ai.error}
 			</p>{/if}
 		<form
-			class="flex shrink-0 flex-col gap-2 p-2"
+			class={['flex shrink-0 flex-col gap-2 p-2', expanded && 'mx-auto w-full max-w-[49.5rem]']}
 			onsubmit={(e) => {
 				e.preventDefault();
 				send();

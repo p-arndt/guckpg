@@ -14,6 +14,7 @@
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import LayoutGridIcon from '@lucide/svelte/icons/layout-grid';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import FocusIcon from '@lucide/svelte/icons/focus';
 	import XIcon from '@lucide/svelte/icons/x';
 	import FolderIcon from '@lucide/svelte/icons/folder';
@@ -184,7 +185,7 @@
 				zIndex: active ? 10 : 0,
 				markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color },
 				style: `stroke: ${color}; stroke-width: ${active ? 2 : 1.25}; opacity: ${dimmed ? 0.2 : 0.8}`,
-				labelStyle: 'font-size: 10px; font-family: var(--font-mono)'
+				labelStyle: 'font-size: 12px; font-family: var(--font-outlier)'
 			};
 		});
 	});
@@ -220,12 +221,16 @@
 )}
 	<div class="flex shrink-0 items-center gap-1">
 		<span class="text-xs text-muted-foreground">{label}</span>
-		<div class="flex items-center rounded-md border p-0.5" role="group" aria-label={label}>
+		<div
+			class="flex items-center rounded-lg border border-rule-2 p-0.5"
+			role="group"
+			aria-label={label}
+		>
 			{#each options as option (option.id)}
 				<Button
 					size="sm"
 					variant={value === option.id ? 'secondary' : 'ghost'}
-					class="h-6 px-2 text-xs"
+					class="h-6 rounded-md px-2 text-xs"
 					aria-pressed={value === option.id}
 					onclick={() => onchange(option.id)}
 				>
@@ -237,8 +242,15 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-col">
-	<div class="flex h-10 shrink-0 items-center gap-2 overflow-x-auto border-b px-2">
-		<Button size="icon-sm" variant="ghost" disabled={tab.running} onclick={load} title="Reload">
+	<div class="flex h-11 shrink-0 items-center gap-3 overflow-x-auto border-b px-2">
+		<Button
+			size="icon-sm"
+			variant="ghost"
+			disabled={tab.running}
+			onclick={load}
+			title="Reload"
+			aria-label="Reload"
+		>
 			<RefreshCwIcon class={tab.running ? 'animate-spin' : ''} />
 		</Button>
 		<Button
@@ -253,16 +265,15 @@
 		{@render segmented('Columns', COLUMN_MODES, columnMode, setColumnMode)}
 		{@render segmented('Lines', EDGE_STYLES, edgeStyle, setEdgeStyle)}
 		{#if focusTable}
-			<div
-				class="flex shrink-0 items-center gap-1 rounded-md border border-primary/40 bg-primary/10 py-0.5 pr-0.5 pl-2 text-xs"
-			>
+			<div class="chip chip-signal h-7 shrink-0 gap-1.5 pr-0.5 pl-2 text-xs">
 				<FocusIcon class="size-3.5" />
-				<span class="font-mono">{focusTable}</span>
+				<span class="measured">{focusTable}</span>
 				<Button
 					size="icon-sm"
 					variant="ghost"
 					class="size-5"
 					title="Show all tables"
+					aria-label="Show all tables"
 					onclick={() => setFocus(null)}
 				>
 					<XIcon class="size-3" />
@@ -284,7 +295,8 @@
 			class="shrink-0 text-xs whitespace-nowrap text-muted-foreground"
 			title="Click a table to highlight its relations, double-click to open its data. Moved tables are remembered."
 		>
-			{tableCount} tables · {fkCount} foreign keys
+			<span class="measured text-cool">{tableCount}</span> tables
+			<span class="measured ml-2 text-cool">{fkCount}</span> foreign keys
 		</span>
 		<Select.Root
 			type="single"
@@ -313,13 +325,18 @@
 	<div class="relative min-h-0 flex-1">
 		{#if tab.error}
 			<div
-				class="m-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive select-text"
+				class="m-3 flex max-w-3xl items-start gap-2.5 rounded-2xl border border-[color-mix(in_oklab,var(--color-bad),transparent_55%)] bg-bad-soft p-4 select-text"
+				role="alert"
 			>
-				{errorMessage(tab.error)}
+				<CircleAlertIcon class="mt-0.5 size-4 shrink-0 text-bad" />
+				<p class="min-w-0 font-medium break-words whitespace-pre-wrap">{errorMessage(tab.error)}</p>
 			</div>
 		{:else if !diagram}
-			<div class="flex h-full items-center justify-center text-muted-foreground">
-				<LoaderIcon class="size-5 animate-spin" />
+			<div
+				class="flex h-full items-center justify-center gap-2 text-[13px] text-muted-foreground"
+				role="status"
+			>
+				<LoaderIcon class="size-4 animate-spin text-cool" /> Reading {tab.schema}…
 			</div>
 		{:else if tableCount === 0}
 			<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -356,10 +373,10 @@
 					<MiniMap
 						pannable
 						zoomable
-						class="!bg-card"
+						class="!bg-raised"
 						nodeColor={(n) =>
 							n.data?.hue == null
-								? 'var(--muted-foreground)'
+								? 'var(--color-rule-2)'
 								: `oklch(0.65 0.12 ${n.data.hue as number})`}
 					/>
 				</SvelteFlow>

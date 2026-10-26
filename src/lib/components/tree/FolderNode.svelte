@@ -51,7 +51,7 @@
 				ondragover={onDragOver}
 				ondragleave={() => (dropTarget = false)}
 				ondrop={onDrop}
-				class="font-medium {dropTarget ? 'bg-primary/10 ring-1 ring-primary/40' : ''}"
+				class="font-medium {dropTarget ? 'bg-signal-soft ring-1 ring-signal ring-inset' : ''}"
 			>
 				{#snippet icon()}
 					{#if expanded}
@@ -61,7 +61,7 @@
 					{/if}
 				{/snippet}
 				{#snippet trailing()}
-					<span class="text-[10px] text-muted-foreground tabular-nums">{count}</span>
+					<span class="measured text-xs text-muted-foreground">{count}</span>
 				{/snippet}
 			</TreeRow>
 		{/snippet}
@@ -84,6 +84,6 @@
 {#if expanded}
 	{@render children()}
 	{#if count === 0}
-		<p class="py-1 pl-10 text-xs text-muted-foreground">Drag connections here</p>
+		<p class="py-1 pl-11 text-[13px] text-muted-foreground">Drag connections here</p>
 	{/if}
 {/if}

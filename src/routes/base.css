@@ -1,0 +1,82 @@
+/* Imported into Tailwind's base layer, so utilities still win over these defaults. */
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+/* A desktop shell: nothing scrolls at the document level, panes scroll themselves. */
+html,
+body {
+	height: 100%;
+	overflow: clip;
+	overscroll-behavior: none;
+}
+html {
+	scrollbar-color: var(--color-rule-2) transparent;
+}
+body {
+	margin: 0;
+	background: var(--color-paper);
+	color: var(--color-ink);
+	font-family: var(--font-body);
+	font-size: 0.875rem;
+	line-height: 1.45;
+	font-synthesis: none;
+	-webkit-font-smoothing: antialiased;
+	caret-color: var(--color-accent-text);
+}
+::selection {
+	background: var(--syntax-selection);
+}
+:focus-visible {
+	outline: 2px solid var(--color-focus);
+	outline-offset: 2px;
+}
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role='grid']:focus-visible,
+[role='treeitem']:focus-visible {
+	outline-offset: -2px;
+}
+a {
+	color: inherit;
+	text-decoration-color: var(--color-rule-2);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 0.16em;
+}
+a:hover {
+	text-decoration-color: var(--color-accent-text);
+}
+h1,
+h2,
+h3 {
+	font-family: var(--font-display);
+	font-weight: 500;
+	letter-spacing: -0.01em;
+	overflow-wrap: break-word;
+	min-width: 0;
+	text-wrap: balance;
+}
+p {
+	text-wrap: pretty;
+}
+kbd,
+code,
+pre {
+	font-family: var(--font-outlier);
+	font-variant-numeric: tabular-nums slashed-zero;
+}
+[hidden] {
+	display: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}

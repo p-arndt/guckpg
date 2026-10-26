@@ -137,7 +137,7 @@
 					<Tabs.Trigger value="general">General</Tabs.Trigger>
 					<Tabs.Trigger value="ssh">
 						SSH tunnel
-						{#if useSsh}<span class="size-1.5 rounded-full bg-emerald-500"></span>{/if}
+						{#if useSsh}<span class="size-1.5 rounded-full bg-ok"></span>{/if}
 					</Tabs.Trigger>
 				</Tabs.List>
 
@@ -349,7 +349,7 @@
 
 			{#if problem}
 				<p
-					class="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-sm break-words text-destructive select-text"
+					class="rounded-lg border border-[color-mix(in_oklab,var(--color-bad),transparent_55%)] bg-bad-soft p-3 text-sm break-words text-foreground select-text"
 				>
 					{problem}
 				</p>

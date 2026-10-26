@@ -13,7 +13,7 @@
 <Sonner
 	theme={mode.current}
 	class="toaster group"
-	style="--normal-bg: var(--color-popover); --normal-text: var(--color-popover-foreground); --normal-border: var(--color-border);"
+	style="--normal-bg: var(--color-paper-2); --normal-text: var(--color-ink); --normal-border: var(--color-rule-2); --success-bg: var(--color-ok-soft); --success-text: var(--color-ink); --success-border: color-mix(in oklab, var(--color-ok) 45%, transparent); --error-bg: var(--color-bad-soft); --error-text: var(--color-ink); --error-border: color-mix(in oklab, var(--color-bad) 45%, transparent); --info-bg: var(--color-cool-soft); --info-text: var(--color-ink); --info-border: color-mix(in oklab, var(--color-cool) 45%, transparent); --warning-bg: var(--color-accent-soft); --warning-text: var(--color-ink); --warning-border: color-mix(in oklab, var(--color-accent) 45%, transparent); --border-radius: var(--radius-card); font-family: var(--font-body);"
 	toastOptions={{
 		classes: {
 			toast: 'cn-toast'

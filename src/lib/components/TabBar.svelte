@@ -20,6 +20,22 @@
 	let renameValue = $state('');
 	let dragging = $state<string | null>(null);
 	let dropIndex = $state<number | null>(null);
+	let strip = $state<HTMLDivElement | null>(null);
+
+	// The strip has no visible scrollbar, so keep the active tab in view.
+	$effect(() => {
+		const id = tabs.activeId;
+		if (!strip || !id) return;
+		strip
+			.querySelector(`[data-tab-id="${CSS.escape(id)}"]`)
+			?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+	});
+
+	/** A vertical wheel scrolls the strip sideways. */
+	function onWheel(e: WheelEvent) {
+		if (!strip || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+		strip.scrollLeft += e.deltaY;
+	}
 
 	async function startRename(tab: Tab) {
 		if (tab.kind !== 'query') return;
@@ -57,7 +73,9 @@
 </script>
 
 <div
-	class="flex h-9 shrink-0 items-end gap-px overflow-x-auto border-b bg-muted/40 px-1"
+	class="flex h-10 shrink-0 scroll-px-1.5 scroll-pe-9 [scrollbar-width:none] items-center gap-0.5 overflow-x-auto overflow-y-hidden border-b px-1.5 [&::-webkit-scrollbar]:hidden"
+	bind:this={strip}
+	onwheel={onWheel}
 	role="tablist"
 	tabindex="-1"
 	ondragover={(e) => dragging && e.preventDefault()}
@@ -72,6 +90,7 @@
 					<div
 						{...props}
 						role="presentation"
+						data-tab-id={tab.id}
 						draggable={renaming !== tab.id}
 						ondragstart={(e) => {
 							dragging = tab.id;
@@ -83,30 +102,25 @@
 							dropIndex = null;
 						}}
 						ondragover={(e) => onDragOver(e, index)}
-						class="group relative flex h-8 max-w-56 shrink-0 items-center gap-1.5 rounded-t-md border border-b-0 pr-1 pl-2.5 text-xs {active
-							? 'bg-background text-foreground'
-							: 'border-transparent text-muted-foreground hover:bg-background/60'} {dragging ===
+						class="group relative flex h-7 max-w-60 shrink-0 items-center gap-1 rounded-lg pr-0.5 pl-2.5 text-[13px] transition-[background-color,color] duration-(--dur-micro) {active
+							? 'bg-hover text-foreground'
+							: 'text-muted-foreground hover:bg-hover/60 hover:text-foreground'} {dragging ===
 						tab.id
 							? 'opacity-50'
 							: ''}"
 					>
 						{#if dropIndex === index && dragging !== tab.id}
-							<span class="absolute inset-y-1 -left-px w-0.5 rounded-full bg-primary"></span>
+							<span class="absolute inset-y-1 -left-0.5 w-0.5 rounded-full bg-signal"></span>
 						{:else if dropIndex === index + 1 && index === tabs.items.length - 1}
-							<span class="absolute inset-y-1 -right-px w-0.5 rounded-full bg-primary"></span>
-						{/if}
-						{#if color}
-							<span
-								class="absolute inset-x-0 top-0 h-0.5 rounded-t-md"
-								style:background-color={color}
-							></span>
+							<span class="absolute inset-y-1 -right-0.5 w-0.5 rounded-full bg-signal"></span>
 						{/if}
 						{#if renaming === tab.id}
 							<SquareTerminalIcon class="size-3.5 shrink-0" />
 							<input
 								id="rename-{tab.id}"
 								bind:value={renameValue}
-								class="h-5 w-32 rounded border bg-background px-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+								aria-label="Tab name"
+								class="h-6 w-36 rounded-md border border-input bg-background px-1.5 text-[13px]"
 								spellcheck="false"
 								onblur={() => finishRename(true)}
 								onkeydown={(e) => {
@@ -118,35 +132,40 @@
 							<button
 								role="tab"
 								aria-selected={active}
-								class="flex min-w-0 items-center gap-1.5"
+								class="flex h-full min-w-0 items-center gap-1.5 rounded-sm"
 								onclick={() => (tabs.activeId = tab.id)}
 								ondblclick={() => startRename(tab)}
 								onauxclick={(e) => {
 									if (e.button === 1) void tabs.requestClose(tab.id);
 								}}
-								title="{tab.title} · {tab.database}{tab.kind === 'query'
-									? ' · double-click to rename'
+								title="{tab.title} in {tab.database}{tab.kind === 'query'
+									? ', double-click to rename'
 									: ''}"
 							>
 								{#if tab.running}
-									<LoaderIcon class="size-3.5 shrink-0 animate-spin" />
+									<LoaderIcon class="size-3.5 shrink-0 animate-spin text-cool" />
 								{:else if tab.kind === 'table'}
-									<TableIcon class="size-3.5 shrink-0" />
+									<TableIcon class="size-3.5 shrink-0" style={color ? `color: ${color}` : ''} />
 								{:else if tab.kind === 'diagram'}
-									<NetworkIcon class="size-3.5 shrink-0" />
+									<NetworkIcon class="size-3.5 shrink-0" style={color ? `color: ${color}` : ''} />
 								{:else}
-									<SquareTerminalIcon class="size-3.5 shrink-0" />
+									<SquareTerminalIcon
+										class="size-3.5 shrink-0"
+										style={color ? `color: ${color}` : ''}
+									/>
 								{/if}
 								<span class="truncate">{tab.title}</span>
 								{#if tab.dirty}
-									<span class="size-1.5 shrink-0 rounded-full bg-amber-500" title="Unsaved changes"
+									<span class="size-1.5 shrink-0 rounded-full bg-signal" title="Unsaved changes"
 									></span>
 								{/if}
 							</button>
 						{/if}
 						<button
-							class="rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-accent {active
-								? 'opacity-60'
+							type="button"
+							aria-label="Close {tab.title}"
+							class="flex size-5 items-center justify-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 {active
+								? 'opacity-100'
 								: ''}"
 							title="Close ({modKey}W)"
 							onclick={() => tabs.requestClose(tab.id)}
@@ -189,7 +208,9 @@
 		</ContextMenu.Root>
 	{/each}
 	<button
-		class="mb-1 ml-1 shrink-0 self-center rounded p-1 text-muted-foreground hover:bg-background/60 hover:text-foreground"
+		type="button"
+		aria-label="New query"
+		class="sticky right-0 flex size-7 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground"
 		title="New query ({modKey}T)"
 		onclick={onNewQuery}
 	>

@@ -124,7 +124,7 @@
 			<div class="relative">
 				{#if dropTarget}
 					<div
-						class="pointer-events-none absolute inset-x-1 -top-px z-10 h-0.5 rounded-full bg-primary"
+						class="pointer-events-none absolute inset-x-1 -top-px z-10 h-0.5 rounded-full bg-signal"
 					></div>
 				{/if}
 				<TreeRow
@@ -150,11 +150,11 @@
 							/>
 							{#if status === 'connected'}
 								<span
-									class="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-emerald-500 ring-1 ring-sidebar"
+									class="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-ok ring-2 ring-sidebar"
 								></span>
 							{:else if status === 'error'}
 								<span
-									class="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-destructive ring-1 ring-sidebar"
+									class="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-bad ring-2 ring-sidebar"
 								></span>
 							{/if}
 						</span>
@@ -164,7 +164,8 @@
 							<LockIcon class="size-3 text-muted-foreground" />
 						{/if}
 						{#if connection.ssh}
-							<span class="rounded border px-1 text-[9px] text-muted-foreground uppercase">ssh</span
+							<span class="text-[11px] text-muted-foreground" title="Connects through an SSH tunnel"
+								>ssh</span
 							>
 						{/if}
 					{/snippet}

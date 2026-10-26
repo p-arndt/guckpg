@@ -115,8 +115,8 @@
 	/>
 {/snippet}
 
-<div class="flex h-9 shrink-0 items-center justify-between border-b px-3">
-	<span class="text-sm font-semibold tracking-tight">guckpg</span>
+<div class="flex h-9 shrink-0 items-center justify-between pr-1.5 pl-3.5">
+	<h2 class="text-[13px] font-medium text-muted-foreground">Connections</h2>
 	<div class="flex items-center">
 		<Button size="icon-xs" variant="ghost" title="New folder" onclick={() => newFolder()}>
 			<FolderPlusIcon />
@@ -128,9 +128,9 @@
 </div>
 
 {#if connections.list.length}
-	<div class="relative shrink-0 px-1.5 pt-1.5">
+	<div class="relative shrink-0 px-2 pb-1.5">
 		<SearchIcon
-			class="pointer-events-none absolute top-1/2 left-3.5 mt-[3px] size-3.5 -translate-y-1/2 text-muted-foreground"
+			class="pointer-events-none absolute top-1/2 left-4 mt-[-3px] size-3.5 -translate-y-1/2 text-muted-foreground"
 		/>
 		<input
 			bind:this={filterInput}
@@ -138,7 +138,8 @@
 			placeholder="Filter connections"
 			spellcheck="false"
 			autocomplete="off"
-			class="h-7 w-full rounded-md border bg-background pr-7 pl-7 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+			aria-label="Filter connections"
+			class="h-7 w-full rounded-lg border border-transparent bg-hover/60 pr-7 pl-7 text-[13px] transition-[background-color,border-color] duration-(--dur-micro) placeholder:text-muted-foreground hover:bg-hover focus:border-rule-2 focus:bg-background"
 			onkeydown={(e) => {
 				if (e.key === 'Escape') {
 					sidebar.filter = '';
@@ -148,7 +149,8 @@
 		/>
 		{#if filtering}
 			<button
-				class="absolute top-1/2 right-3 mt-[3px] -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-accent"
+				type="button"
+				class="absolute top-1/2 right-3.5 mt-[-3px] -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:bg-hover hover:text-foreground"
 				title="Clear filter"
 				onclick={() => (sidebar.filter = '')}
 			>
@@ -158,7 +160,7 @@
 	</div>
 {/if}
 
-<div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-1.5" role="tree">
+<div class="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2" role="tree">
 	{#each layout.folders as folder (folder.name)}
 		<FolderNode
 			name={folder.name}
@@ -178,16 +180,14 @@
 	{/each}
 
 	{#if !connections.list.length}
-		<div
-			class="flex flex-col items-center gap-3 px-4 py-10 text-center text-sm text-muted-foreground"
-		>
+		<div class="flex flex-col items-start gap-3 px-2.5 py-6 text-sm text-muted-foreground">
 			<p>No connections yet.</p>
 			<Button size="sm" variant="outline" onclick={() => onEdit(null)}>
 				<PlusIcon /> Add connection
 			</Button>
 		</div>
 	{:else if filtering && !layout.folders.length && !layout.loose.length}
-		<p class="px-3 py-6 text-center text-xs text-muted-foreground">
+		<p class="px-2.5 py-4 text-[13px] text-muted-foreground">
 			Nothing matches “{sidebar.filter}”.
 		</p>
 	{/if}
@@ -199,8 +199,8 @@
 			ondragover={onRootDragOver}
 			ondragleave={() => (rootDrop = false)}
 			ondrop={onRootDrop}
-			class="mt-1 flex min-h-10 flex-1 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground {rootDrop
-				? 'border-primary bg-primary/5 text-foreground'
+			class="mt-1 flex min-h-10 flex-1 items-center justify-center rounded-lg border border-dashed border-rule-2 text-xs text-muted-foreground {rootDrop
+				? 'border-signal bg-signal-soft text-foreground'
 				: ''}"
 		>
 			Drop here for no folder

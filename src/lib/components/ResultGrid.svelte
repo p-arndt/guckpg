@@ -430,6 +430,12 @@
 		selected = { row: Number(el.dataset.row), col: Number(el.dataset.col) };
 	}
 
+	function gutterClass(item: Item): string {
+		if (item.kind === 'new') return 'bg-ok-soft text-ok';
+		if (edits.deleted[item.orig]) return 'bg-bad-soft text-bad';
+		return 'bg-background text-muted-foreground';
+	}
+
 	function focusInput(node: HTMLInputElement) {
 		node.focus();
 		const end = node.value.length;
@@ -437,9 +443,9 @@
 	}
 
 	function rowClass(item: Item): string {
-		if (item.kind === 'new') return 'bg-emerald-500/10';
-		if (edits.deleted[item.orig]) return 'bg-destructive/10 text-muted-foreground line-through';
-		return 'hover:bg-accent/40';
+		if (item.kind === 'new') return 'bg-ok-soft';
+		if (edits.deleted[item.orig]) return 'bg-bad-soft text-muted-foreground line-through';
+		return 'hover:bg-hover/60';
 	}
 
 	const selectedItem = $derived(selected ? items[selected.row] : undefined);
@@ -487,7 +493,7 @@
 					tabindex="0"
 					role="grid"
 					aria-rowcount={items.length}
-					class="relative min-h-0 flex-1 overflow-auto font-mono text-xs outline-none select-none"
+					class="measured relative min-h-0 flex-1 overflow-auto bg-background text-xs select-none"
 				>
 					<div
 						class="relative"
@@ -495,11 +501,11 @@
 						style:height="{HEADER_PX + items.length * ROW_PX}px"
 					>
 						<div
-							class="sticky top-0 z-20 flex border-b bg-muted font-sans font-medium"
+							class="sticky top-0 z-20 flex border-b bg-grid-head font-sans"
 							style:height="{HEADER_PX}px"
 						>
 							<div
-								class="sticky left-0 z-10 shrink-0 border-r bg-muted"
+								class="sticky left-0 z-10 shrink-0 border-r bg-grid-head"
 								style:width="{numberWidth}px"
 							></div>
 							<div class="shrink-0" style:width="{offsets[cols.start]}px"></div>
@@ -510,24 +516,31 @@
 									style:width="{widths[c]}px"
 								>
 									<button
-										class="flex h-full min-w-0 flex-1 items-center gap-1 px-2 text-left hover:bg-accent"
-										title={columnTypes[column] ? `${column} · ${columnTypes[column]}` : column}
+										type="button"
+										class="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2 text-left text-[13px] font-medium transition-[background-color] duration-(--dur-micro) hover:bg-hover"
+										title={columnTypes[column] ? `${column}: ${columnTypes[column]}` : column}
 										onclick={() => toggleSort(column)}
 									>
 										{#if primaryKeys.includes(column)}
-											<KeyRoundIcon class="size-3 shrink-0 text-amber-500" />
+											<KeyRoundIcon class="size-3 shrink-0 text-ink-2" aria-label="Primary key" />
 										{/if}
 										<span class="truncate">{column}</span>
 										{#if columnTypes[column]}
-											<span class="truncate text-[10px] font-normal text-muted-foreground">
+											<span class="measured truncate text-xs font-normal text-muted-foreground">
 												{columnTypes[column]}
 											</span>
 										{/if}
 										{#if activeSort?.column === column}
 											{#if activeSort.dir === 'asc'}
-												<ArrowUpIcon class="ml-auto size-3 shrink-0" />
+												<ArrowUpIcon
+													class="ml-auto size-3.5 shrink-0 text-signal-text"
+													aria-label="Ascending"
+												/>
 											{:else}
-												<ArrowDownIcon class="ml-auto size-3 shrink-0" />
+												<ArrowDownIcon
+													class="ml-auto size-3.5 shrink-0 text-signal-text"
+													aria-label="Descending"
+												/>
 											{/if}
 										{/if}
 									</button>
@@ -542,13 +555,15 @@
 
 						{#each visible as { item, index } (index)}
 							<div
-								class="absolute left-0 flex border-b border-border/60 {rowClass(item)}"
+								class="border-rule/70 absolute left-0 flex border-b {rowClass(item)}"
 								style:top="{HEADER_PX + index * ROW_PX}px"
 								style:height="{ROW_PX}px"
 								style:width="{totalWidth}px"
 							>
 								<div
-									class="sticky left-0 z-10 flex shrink-0 items-center justify-end border-r bg-background px-2 text-muted-foreground no-underline"
+									class="sticky left-0 z-10 flex shrink-0 items-center justify-end border-r px-2 no-underline {gutterClass(
+										item
+									)}"
 									style:width="{numberWidth}px"
 								>
 									{item.kind === 'new' ? '+' : rowOffset + index + 1}
@@ -564,10 +579,10 @@
 										tabindex="-1"
 										data-row={index}
 										data-col={c}
-										class="relative flex shrink-0 items-center overflow-hidden border-r border-border/60 px-2 whitespace-pre {isSelected
-											? 'bg-primary/15 ring-1 ring-primary/50 ring-inset'
+										class="border-rule/70 relative flex shrink-0 items-center overflow-hidden border-r px-2 whitespace-pre {isSelected
+											? 'bg-signal-soft ring-1 ring-signal ring-inset'
 											: changed
-												? 'bg-amber-500/20'
+												? 'bg-signal-soft shadow-[inset_2px_0_0_var(--color-accent)]'
 												: ''}"
 										class:justify-end={isNumeric(value ?? null)}
 										style:width="{widths[c]}px"
@@ -584,7 +599,8 @@
 											<input
 												use:focusInput
 												bind:value={editing.draft}
-												class="absolute inset-0 bg-background px-2 font-mono text-xs outline-2 -outline-offset-2 outline-primary"
+												aria-label="Cell value"
+												class="measured absolute inset-0 bg-background px-2 text-xs outline-2 -outline-offset-2 outline-signal"
 												onkeydown={(e) => {
 													e.stopPropagation();
 													if (e.key === 'Enter') commitEdit();
@@ -593,9 +609,9 @@
 												onblur={commitEdit}
 											/>
 										{:else if value === DEFAULT}
-											<span class="text-muted-foreground/50 italic">DEFAULT</span>
+											<span class="text-muted-foreground">DEFAULT</span>
 										{:else if value === null}
-											<span class="text-muted-foreground/60 italic">NULL</span>
+											<span class="text-muted-foreground">NULL</span>
 										{:else}
 											<span class="truncate">{cellText(value)}</span>
 										{/if}
@@ -684,7 +700,7 @@
 	</ContextMenu.Root>
 
 	{#if editable && source}
-		<div class="flex h-8 shrink-0 items-center gap-1 border-t bg-muted/30 px-2 text-xs">
+		<div class="flex h-9 shrink-0 items-center gap-1 border-t px-2 text-xs">
 			<Button size="xs" variant="ghost" onclick={addRow} title="Add a row">
 				<PlusIcon /> Row
 			</Button>
@@ -707,8 +723,8 @@
 				<RedoIcon />
 			</Button>
 			{#if edits.count > 0}
-				<span class="ml-auto font-medium text-amber-600 dark:text-amber-400">
-					{edits.count} unsaved change{edits.count === 1 ? '' : 's'}
+				<span class="ml-auto font-medium text-signal-text">
+					<span class="measured">{edits.count}</span> unsaved change{edits.count === 1 ? '' : 's'}
 				</span>
 				<Button size="xs" variant="ghost" onclick={showPreview} title="Show the SQL that will run">
 					<CodeIcon /> SQL
@@ -718,21 +734,27 @@
 				</Button>
 				<Button size="xs" disabled={saving} onclick={save}>
 					{#if saving}<LoaderIcon class="animate-spin" />{/if}
-					Save <span class="opacity-60">⌘S</span>
+					Save <span class="measured opacity-70">⌘S</span>
 				</Button>
 			{:else}
-				<span class="ml-auto truncate text-muted-foreground">
-					Double-click or type to edit · ⌫ deletes a row · ⌘V pastes from spreadsheets ·
-					<span class="font-mono">{source.schema}.{source.table}</span>
+				<span class="ml-auto flex min-w-0 items-center gap-4 truncate text-muted-foreground">
+					<span class="truncate">Double-click or type to edit</span>
+					<span class="flex items-center gap-1.5 whitespace-nowrap"
+						><kbd class="key">⌫</kbd> deletes a row</span
+					>
+					<span class="flex items-center gap-1.5 whitespace-nowrap"
+						><kbd class="key">⌘V</kbd> pastes from spreadsheets</span
+					>
+					<span class="measured whitespace-nowrap text-ink-2">{source.schema}.{source.table}</span>
 				</span>
 			{/if}
 		</div>
 	{:else if editTarget && !source}
-		<div class="flex h-6 shrink-0 items-center border-t px-2 text-[11px] text-muted-foreground">
+		<div class="flex h-8 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
 			Read-only result: editing needs rows from one table with its primary key in the result.
 		</div>
 	{:else if editTarget?.readOnly && source}
-		<div class="flex h-6 shrink-0 items-center border-t px-2 text-[11px] text-muted-foreground">
+		<div class="flex h-8 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
 			Read-only connection.
 		</div>
 	{/if}
@@ -756,7 +778,7 @@
 			</Dialog.Description>
 		</Dialog.Header>
 		<pre
-			class="max-h-[55vh] overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap select-text">{preview
+			class="max-h-[55vh] overflow-auto rounded-lg border bg-background p-3 text-xs whitespace-pre-wrap select-text">{preview
 				?.map((sql) => sql + ';')
 				.join('\n')}</pre>
 		<Dialog.Footer>

@@ -1,81 +1,53 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: Console (deal 2/3, seed desktop-postgres-client-developers-48e1·592dc79e·2026-10-25·r0) · redesign: full
+ * nav: kept shell (top bar, sidebar tree, tab strip) · signature: the result grid as a diff (ok and bad gutters, amber edits, cool readings) · states: loading, empty, error, full on results, tables and the tree · console: graphite (dark), paper (light)
+ * axes: dark/grotesk-sans/chromatic-amber · posture: restrained · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V3 · weakest: V, the shell stays a familiar IDE layout on purpose; the variety lives in the grid's diff gutters and the measured readings */
+/* Hallmark · dismissed 74 · the six connection colours in ConnectionDialog are persisted per connection in the user's config, so they stay as stored data */
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn-svelte/tailwind.css';
-@import '@fontsource-variable/inter';
+@import '@fontsource-variable/host-grotesk';
+@import '@fontsource/atkinson-hyperlegible-mono/400.css';
+@import '@fontsource/atkinson-hyperlegible-mono/500.css';
+@import './tokens.css';
+@import './base.css' layer(base);
 
 @custom-variant dark (&:is(.dark *));
 
+/* shadcn's names, resolved from the Console tokens */
 :root {
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.145 0 0);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.205 0 0);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.97 0 0);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.97 0 0);
-	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.97 0 0);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.922 0 0);
-	--input: oklch(0.922 0 0);
-	--ring: oklch(0.708 0 0);
-	--chart-1: oklch(0.87 0 0);
-	--chart-2: oklch(0.556 0 0);
-	--chart-3: oklch(0.439 0 0);
-	--chart-4: oklch(0.371 0 0);
-	--chart-5: oklch(0.269 0 0);
-	--radius: 0.625rem;
-	--sidebar: oklch(0.985 0 0);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.205 0 0);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.97 0 0);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.922 0 0);
-	--sidebar-ring: oklch(0.708 0 0);
-}
-
-.dark {
-	--background: oklch(0.145 0 0);
-	--foreground: oklch(0.985 0 0);
-	--card: oklch(0.205 0 0);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.205 0 0);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.922 0 0);
-	--primary-foreground: oklch(0.205 0 0);
-	--secondary: oklch(0.269 0 0);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.269 0 0);
-	--muted-foreground: oklch(0.708 0 0);
-	--accent: oklch(0.269 0 0);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 10%);
-	--input: oklch(1 0 0 / 15%);
-	--ring: oklch(0.556 0 0);
-	--chart-1: oklch(0.87 0 0);
-	--chart-2: oklch(0.556 0 0);
-	--chart-3: oklch(0.439 0 0);
-	--chart-4: oklch(0.371 0 0);
-	--chart-5: oklch(0.269 0 0);
-	--sidebar: oklch(0.205 0 0);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.488 0.243 264.376);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.269 0 0);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
-	--sidebar-border: oklch(1 0 0 / 10%);
-	--sidebar-ring: oklch(0.556 0 0);
+	--background: var(--color-paper-3);
+	--foreground: var(--color-ink);
+	--card: var(--color-paper-2);
+	--card-foreground: var(--color-ink);
+	--popover: var(--color-paper-2);
+	--popover-foreground: var(--color-ink);
+	--primary: var(--color-accent);
+	--primary-foreground: var(--color-accent-ink);
+	--secondary: var(--color-hover);
+	--secondary-foreground: var(--color-ink);
+	--muted: var(--color-paper);
+	--muted-foreground: var(--color-muted);
+	--accent: var(--color-hover);
+	--accent-foreground: var(--color-ink);
+	--destructive: var(--color-bad);
+	--border: var(--color-rule);
+	--input: var(--color-field-edge);
+	--ring: var(--color-focus);
+	--radius: 8px;
+	--sidebar: var(--color-paper);
+	--sidebar-foreground: var(--color-ink);
+	--sidebar-primary: var(--color-accent);
+	--sidebar-primary-foreground: var(--color-accent-ink);
+	--sidebar-accent: var(--color-hover);
+	--sidebar-accent-foreground: var(--color-ink);
+	--sidebar-border: var(--color-rule);
+	--sidebar-ring: var(--color-focus);
 }
 
 @theme inline {
-	--font-sans: 'Inter Variable', sans-serif;
+	--font-sans: var(--font-display);
+	--font-mono: var(--font-outlier);
 	--color-sidebar-ring: var(--sidebar-ring);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -84,11 +56,6 @@
 	--color-sidebar-primary: var(--sidebar-primary);
 	--color-sidebar-foreground: var(--sidebar-foreground);
 	--color-sidebar: var(--sidebar);
-	--color-chart-5: var(--chart-5);
-	--color-chart-4: var(--chart-4);
-	--color-chart-3: var(--chart-3);
-	--color-chart-2: var(--chart-2);
-	--color-chart-1: var(--chart-1);
 	--color-ring: var(--ring);
 	--color-input: var(--input);
 	--color-border: var(--border);
@@ -107,51 +74,138 @@
 	--color-card: var(--card);
 	--color-foreground: var(--foreground);
 	--color-background: var(--background);
-	--radius-sm: calc(var(--radius) * 0.6);
-	--radius-md: calc(var(--radius) * 0.8);
+
+	/* Console roles as utilities: bg-chrome, text-cool, bg-ok-soft, … */
+	--color-chrome: var(--color-paper);
+	--color-raised: var(--color-paper-2);
+	--color-grid-head: color-mix(in oklab, var(--color-hover) 55%, var(--color-paper-3));
+	--color-work: var(--color-paper-3);
+	--color-hover: var(--color-hover);
+	--color-ink-2: var(--color-ink-2);
+	--color-rule-2: var(--color-rule-2);
+	--color-signal: var(--color-accent);
+	--color-signal-ink: var(--color-accent-ink);
+	--color-signal-text: var(--color-accent-text);
+	--color-signal-soft: var(--color-accent-soft);
+	--color-cool: var(--color-cool);
+	--color-cool-soft: var(--color-cool-soft);
+	--color-ok: var(--color-ok);
+	--color-ok-soft: var(--color-ok-soft);
+	--color-bad: var(--color-bad);
+	--color-bad-soft: var(--color-bad-soft);
+	--color-scrim: var(--color-scrim);
+
+	--radius-sm: 5px;
+	--radius-md: 6px;
 	--radius-lg: var(--radius);
-	--radius-xl: calc(var(--radius) * 1.4);
-	--radius-2xl: calc(var(--radius) * 1.8);
-	--radius-3xl: calc(var(--radius) * 2.2);
-	--radius-4xl: calc(var(--radius) * 2.6);
+	--radius-xl: 10px;
+	--shadow-panel: var(--shadow-panel);
+	--radius-2xl: var(--radius-card);
+	--radius-3xl: var(--radius-card);
+	--radius-4xl: var(--radius-card);
 }
 
 @layer base {
 	* {
-		@apply border-border outline-ring/50;
-	}
-	body {
-		@apply bg-background text-foreground;
-	}
-	html {
-		@apply font-sans;
+		@apply border-border;
 	}
 }
 
-:root {
-	--font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
-	--sql-keyword: oklch(0.5 0.2 270);
-	--sql-string: oklch(0.52 0.14 150);
-	--sql-number: oklch(0.55 0.16 50);
-	--sql-comment: oklch(0.6 0 0);
-	--sql-type: oklch(0.5 0.14 210);
-	--sql-active-line: oklch(0.5 0 0 / 4%);
-	--sql-selection: oklch(0.6 0.15 260 / 22%);
+/* One focus ring for every control, instant, outside the layers so no `outline-none`
+ * utility can remove it. Menu items and options show focus with their highlight. */
+:focus-visible:not(
+	.cm-content,
+	[role='menuitem'],
+	[role='menuitemcheckbox'],
+	[role='menuitemradio'],
+	[role='option']
+) {
+	outline: 2px solid var(--color-focus);
+	outline-offset: 2px;
+}
+:is(input, textarea, select, [role='grid'], [role='tab']):focus-visible {
+	outline-offset: -2px;
+}
+/* The chat composer shows focus on its whole frame (focus-within), not on the bare field. */
+[data-composer-input]:focus-visible {
+	outline: none;
 }
 
-.dark {
-	--sql-keyword: oklch(0.75 0.14 280);
-	--sql-string: oklch(0.78 0.13 150);
-	--sql-number: oklch(0.8 0.13 60);
-	--sql-comment: oklch(0.58 0 0);
-	--sql-type: oklch(0.78 0.11 210);
-	--sql-active-line: oklch(1 0 0 / 4%);
-	--sql-selection: oklch(0.6 0.15 260 / 35%);
-}
+@layer components {
+	/* What the database wrote: ids, counts, timings, cell values. */
+	.measured {
+		font-family: var(--font-outlier);
+		font-variant-numeric: tabular-nums slashed-zero;
+	}
 
-html,
-body {
-	height: 100%;
-	overflow: hidden;
-	overscroll-behavior: none;
+	/* A state chip: the label face inside a hairline, tinted by meaning. */
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2xs);
+		height: 1.25rem;
+		padding-inline: 6px;
+		border: var(--rule-hair) solid var(--color-rule-2);
+		border-radius: var(--radius-chip);
+		font-size: 0.75rem;
+		font-weight: 500;
+		line-height: 1;
+		white-space: nowrap;
+		color: var(--color-muted);
+	}
+	.chip-signal {
+		background: var(--color-accent-soft);
+		border-color: color-mix(in oklab, var(--color-accent) 45%, transparent);
+		color: var(--color-ink);
+	}
+	.chip-ok {
+		background: var(--color-ok-soft);
+		border-color: color-mix(in oklab, var(--color-ok) 45%, transparent);
+		color: var(--color-ink);
+	}
+	.chip-cool {
+		background: var(--color-cool-soft);
+		border-color: color-mix(in oklab, var(--color-cool) 45%, transparent);
+		color: var(--color-ink);
+	}
+
+	kbd.key {
+		display: inline-flex;
+		align-items: center;
+		height: 1.25rem;
+		padding-inline: 5px;
+		border: var(--rule-hair) solid var(--color-rule-2);
+		border-bottom-width: 2px;
+		border-radius: var(--radius-chip);
+		background: var(--color-paper-2);
+		color: var(--color-ink-2);
+		font-size: 0.75rem;
+		line-height: 1;
+	}
+
+	/* Lezer class highlighter tokens, for SQL rendered outside the editor. */
+	.tok-keyword {
+		color: var(--syntax-keyword);
+		font-weight: 500;
+	}
+	.tok-string {
+		color: var(--syntax-string);
+	}
+	.tok-number,
+	.tok-bool,
+	.tok-atom,
+	.tok-literal {
+		color: var(--syntax-number);
+	}
+	.tok-typeName {
+		color: var(--syntax-type);
+	}
+	.tok-comment {
+		color: var(--color-muted);
+		font-style: italic;
+	}
+	.tok-operator,
+	.tok-punctuation {
+		color: var(--color-muted);
+	}
 }

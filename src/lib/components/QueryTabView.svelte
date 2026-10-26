@@ -28,6 +28,10 @@
 
 	const connection = $derived(connections.get(tab.connectionId));
 
+	const rowLimitLabel = (n: string) => Number(n).toLocaleString('en-US');
+	const quietTrigger =
+		'h-7 gap-1.5 border-transparent bg-transparent text-[13px] shadow-none hover:bg-hover dark:bg-transparent dark:hover:bg-hover data-[state=open]:bg-hover';
+
 	$effect(() => {
 		const id = tab.connectionId;
 		api.listDatabases(id).then(
@@ -107,77 +111,76 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
-	<div class="flex h-10 shrink-0 items-center gap-1.5 border-b px-2">
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				{#snippet child({ props })}
-					<Button {...props} size="sm" disabled={tab.running} onclick={() => execute(false)}>
-						<PlayIcon /> Run
-					</Button>
-				{/snippet}
-			</Tooltip.Trigger>
-			<Tooltip.Content>Selection or statement at cursor (⌘↵)</Tooltip.Content>
-		</Tooltip.Root>
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				{#snippet child({ props })}
-					<Button
-						{...props}
-						size="sm"
-						variant="outline"
-						disabled={tab.running}
-						onclick={() => execute(true)}
-					>
-						<ListVideoIcon /> Run all
-					</Button>
-				{/snippet}
-			</Tooltip.Trigger>
-			<Tooltip.Content>Whole script (⇧⌘↵)</Tooltip.Content>
-		</Tooltip.Root>
-		{#if tab.running}
-			<Button size="sm" variant="destructive" onclick={cancel}>
-				<SquareIcon /> Stop
-			</Button>
-		{/if}
+	<div class="flex h-11 shrink-0 items-center gap-1 px-2">
+		<Select.Root type="single" bind:value={tab.database} disabled={tab.running}>
+			<Select.Trigger size="sm" class={quietTrigger} aria-label="Database">
+				<DatabaseIcon class="size-3.5 text-muted-foreground" />
+				<span class="font-medium">{tab.database}</span>
+			</Select.Trigger>
+			<Select.Content>
+				{#each databases as db (db)}
+					<Select.Item value={db} label={db} />
+				{/each}
+			</Select.Content>
+		</Select.Root>
+		<Select.Root type="single" bind:value={maxRows}>
+			<Select.Trigger size="sm" class={quietTrigger} aria-label="Row limit">
+				<span class="text-muted-foreground">Limit</span>
+				<span class="measured">{rowLimitLabel(maxRows)}</span>
+			</Select.Trigger>
+			<Select.Content>
+				{#each ['100', '1000', '10000', '100000'] as n (n)}
+					<Select.Item value={n} label={`${rowLimitLabel(n)} rows`} />
+				{/each}
+			</Select.Content>
+		</Select.Root>
 
 		<div class="ml-auto flex items-center gap-1.5">
-			{#if connection}
-				<span class="flex items-center gap-1.5 text-xs text-muted-foreground">
-					<span
-						class="size-2 rounded-full"
-						style:background-color={connection.color ?? 'var(--muted-foreground)'}
-					></span>
-					{connection.name}
-					{#if connection.readOnly}
-						<span class="rounded border px-1 text-[10px] uppercase">read-only</span>
-					{/if}
-				</span>
+			{#if tab.running}
+				<Button size="sm" variant="ghost" class="text-bad" onclick={cancel}>
+					<SquareIcon /> Stop
+				</Button>
 			{/if}
-			<Select.Root type="single" bind:value={tab.database} disabled={tab.running}>
-				<Select.Trigger size="sm" class="h-7 min-w-32 text-xs">
-					<DatabaseIcon class="size-3.5" />
-					{tab.database}
-				</Select.Trigger>
-				<Select.Content>
-					{#each databases as db (db)}
-						<Select.Item value={db} label={db} />
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			<Select.Root type="single" bind:value={maxRows}>
-				<Select.Trigger size="sm" class="h-7 text-xs">
-					{maxRows === '100000' ? 'max 100k' : `max ${maxRows}`}
-				</Select.Trigger>
-				<Select.Content>
-					{#each ['100', '1000', '10000', '100000'] as n (n)}
-						<Select.Item value={n} label={n === '100000' ? '100k' : n} />
-					{/each}
-				</Select.Content>
-			</Select.Root>
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<Button
+							{...props}
+							size="sm"
+							variant="ghost"
+							disabled={tab.running}
+							onclick={() => execute(true)}
+						>
+							<ListVideoIcon /> Run all
+						</Button>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content>Run the whole script <kbd class="key">⇧⌘↵</kbd></Tooltip.Content>
+			</Tooltip.Root>
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<Button
+							{...props}
+							size="sm"
+							class="pr-1.5"
+							disabled={tab.running}
+							onclick={() => execute(false)}
+						>
+							<PlayIcon class="fill-current" /> Run
+							<kbd
+								class="ml-1 rounded-[4px] bg-signal-ink/10 px-1 text-[11px] leading-4 font-normal"
+								>⌘↵</kbd
+							>
+						</Button>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content>Run the selection or the statement at the cursor</Tooltip.Content>
+			</Tooltip.Root>
 		</div>
 	</div>
 
-	<Resizable.PaneGroup direction="vertical" class="min-h-0 flex-1">
+	<Resizable.PaneGroup direction="vertical" autoSaveId="guckpg.query" class="min-h-0 flex-1">
 		<Resizable.Pane defaultSize={45} minSize={10}>
 			<SqlEditor
 				bind:this={editor}

@@ -31,17 +31,19 @@
 	{...rest}
 	type="button"
 	class={cn(
-		'group flex h-7 w-full items-center gap-1 rounded-md pr-2 text-left text-[13px] hover:bg-sidebar-accent focus-visible:bg-sidebar-accent focus-visible:outline-none data-[state=open]:bg-sidebar-accent',
+		'group flex h-7 w-full items-center gap-1.5 rounded-lg pr-2 text-left text-[13px] text-ink-2 transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground data-[state=open]:bg-hover data-[state=open]:text-foreground',
 		className
 	)}
-	style:padding-left="{depth * 12 + 4}px"
+	style:padding-left="{depth * 14 + 4}px"
 	title={label}
 >
 	<span class="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
 		{#if loading}
 			<LoaderIcon class="size-3.5 animate-spin" />
 		{:else if expanded !== undefined}
-			<ChevronRightIcon class="size-3.5 transition-transform {expanded ? 'rotate-90' : ''}" />
+			<ChevronRightIcon
+				class="size-3.5 transition-transform duration-(--dur-micro) {expanded ? 'rotate-90' : ''}"
+			/>
 		{/if}
 	</span>
 	{#if icon}<span class="flex shrink-0 items-center text-muted-foreground">{@render icon()}</span

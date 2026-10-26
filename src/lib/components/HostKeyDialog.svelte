@@ -25,7 +25,7 @@
 				>) before trusting it.
 			</AlertDialog.Description>
 		</AlertDialog.Header>
-		<code class="rounded-md border bg-muted/50 p-2 font-mono text-xs break-all select-text">
+		<code class="rounded-lg border bg-background p-2 font-mono text-xs break-all select-text">
 			{pending?.fingerprint}
 		</code>
 		<AlertDialog.Footer>

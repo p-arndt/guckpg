@@ -39,25 +39,25 @@
 
 	// Colors come from CSS variables so light and dark mode both work.
 	const highlight = HighlightStyle.define([
-		{ tag: tags.keyword, color: 'var(--sql-keyword)', fontWeight: '500' },
-		{ tag: [tags.string, tags.special(tags.string)], color: 'var(--sql-string)' },
-		{ tag: [tags.number, tags.bool, tags.null], color: 'var(--sql-number)' },
+		{ tag: tags.keyword, color: 'var(--syntax-keyword)', fontWeight: '500' },
+		{ tag: [tags.string, tags.special(tags.string)], color: 'var(--syntax-string)' },
+		{ tag: [tags.number, tags.bool, tags.null], color: 'var(--syntax-number)' },
 		{
 			tag: [tags.lineComment, tags.blockComment],
-			color: 'var(--sql-comment)',
+			color: 'var(--color-muted)',
 			fontStyle: 'italic'
 		},
-		{ tag: [tags.typeName, tags.standard(tags.name)], color: 'var(--sql-type)' },
+		{ tag: [tags.typeName, tags.standard(tags.name)], color: 'var(--syntax-type)' },
 		{ tag: [tags.operator, tags.punctuation], color: 'var(--muted-foreground)' }
 	]);
 
 	const theme = EditorView.theme({
 		'&': { height: '100%', fontSize: '13px', backgroundColor: 'transparent' },
-		'.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.55' },
-		'.cm-content': { caretColor: 'var(--foreground)' },
+		'.cm-scroller': { fontFamily: 'var(--font-outlier)', lineHeight: '1.55' },
+		'.cm-content': { caretColor: 'var(--color-accent-text)' },
 		// basicSetup draws its own cursor, black by default: invisible in dark mode.
 		'.cm-cursor, .cm-dropCursor': {
-			borderLeftColor: 'var(--foreground)',
+			borderLeftColor: 'var(--color-accent-text)',
 			borderLeftWidth: '2px'
 		},
 		'.cm-gutters': {
@@ -65,18 +65,19 @@
 			color: 'var(--muted-foreground)',
 			border: 'none'
 		},
-		'.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'var(--sql-active-line)' },
+		'.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'var(--syntax-active-line)' },
 		'&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
-			backgroundColor: 'var(--sql-selection) !important'
+			backgroundColor: 'var(--syntax-selection) !important'
 		},
 		'.cm-tooltip': {
 			backgroundColor: 'var(--popover)',
 			color: 'var(--popover-foreground)',
-			border: '1px solid var(--border)',
-			borderRadius: '6px'
+			border: '1px solid var(--color-rule-2)',
+			borderRadius: '6px',
+			fontFamily: 'var(--font-outlier)'
 		},
 		'.cm-tooltip-autocomplete ul li[aria-selected]': {
-			backgroundColor: 'var(--accent)',
+			backgroundColor: 'var(--color-accent-soft)',
 			color: 'var(--accent-foreground)'
 		},
 		'.cm-error-mark': {

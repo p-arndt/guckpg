@@ -54,7 +54,7 @@
 >
 	<Dialog.Content class="sm:max-w-3xl">
 		<Dialog.Header>
-			<Dialog.Title class="font-mono">{viewing?.column}</Dialog.Title>
+			<Dialog.Title>{viewing?.column}</Dialog.Title>
 			<Dialog.Description>
 				{viewing?.value === null ? 'NULL' : `${viewing?.value.length ?? 0} characters`}
 			</Dialog.Description>
@@ -63,13 +63,14 @@
 			<textarea
 				bind:value={draft}
 				spellcheck={false}
-				class="h-[50vh] w-full resize-none rounded-md border bg-muted/40 p-3 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+				aria-label="Value"
+				class="h-[50vh] w-full resize-none rounded-lg border border-input bg-background p-3 font-mono text-xs"
 				onkeydown={(e) => {
 					if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') save(draft);
 				}}></textarea>
 		{:else}
 			<pre
-				class="max-h-[60vh] overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap select-text">{draft}</pre>
+				class="max-h-[60vh] overflow-auto rounded-lg border bg-background p-3 font-mono text-xs whitespace-pre-wrap select-text">{draft}</pre>
 		{/if}
 		<Dialog.Footer>
 			<Button
@@ -83,7 +84,9 @@
 			</Button>
 			{#if viewing?.save}
 				<Button variant="outline" onclick={() => save(null)}>Set NULL</Button>
-				<Button onclick={() => save(draft)}>Apply <span class="opacity-60">⌘↵</span></Button>
+				<Button onclick={() => save(draft)}
+					>Apply <span class="measured opacity-70">⌘↵</span></Button
+				>
 			{/if}
 		</Dialog.Footer>
 	</Dialog.Content>

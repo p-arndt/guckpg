@@ -1,0 +1,112 @@
+/* Console tokens. Light is the theme's paper colourway, dark is graphite.
+ * Amber marks what a person did or is about to do (the primary action, a selection,
+ * an unsaved edit); cool marks what the database measured (counts, timings, versions).
+ * Ok and bad exist for diffs and connection state only. */
+
+:root {
+	color-scheme: light;
+
+	--space-3xs: 2px;
+	--space-2xs: 4px;
+	--space-xs: 8px;
+	--space-sm: 12px;
+	--space-md: 16px;
+	--space-lg: 24px;
+	--space-xl: 40px;
+	--space-2xl: 64px;
+
+	--ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+	--dur-micro: 120ms;
+	--dur-short: 220ms;
+
+	--z-dropdown: 100;
+	--z-modal: 400;
+	--z-toast: 500;
+	--z-tooltip: 600;
+
+	/* chrome: top bar, sidebar, tab strip, toolbars */
+	--color-paper: oklch(95.2% 0.006 85);
+	/* raised: menus, dialogs, popovers */
+	--color-paper-2: oklch(99.4% 0.003 85);
+	/* work: the editor and the result grid */
+	--color-paper-3: oklch(99.5% 0.002 85);
+	--color-hover: oklch(92.6% 0.009 85);
+
+	--color-ink: oklch(19% 0.01 60);
+	--color-ink-2: oklch(32% 0.01 60);
+	--color-muted: oklch(46% 0.012 60);
+	--color-rule: oklch(88.5% 0.008 85);
+	--color-rule-2: oklch(79% 0.01 85);
+	--color-field-edge: oklch(64% 0.012 85);
+
+	--color-accent: oklch(76% 0.15 76);
+	--color-accent-ink: oklch(20% 0.04 70);
+	--color-accent-text: oklch(50% 0.13 70);
+	--color-accent-soft: oklch(93% 0.05 82);
+	--color-focus: oklch(56% 0.15 70);
+
+	--color-cool: oklch(50% 0.14 250);
+	--color-cool-soft: oklch(93.5% 0.03 245);
+	--color-ok: oklch(49% 0.13 150);
+	--color-ok-soft: oklch(94.5% 0.04 150);
+	--color-bad: oklch(52% 0.18 25);
+	--color-bad-soft: oklch(94.5% 0.03 25);
+	--color-scrim: oklch(19% 0.01 60 / 35%);
+
+	--syntax-keyword: oklch(48% 0.14 250);
+	--syntax-string: oklch(47% 0.12 150);
+	--syntax-number: oklch(52% 0.13 60);
+	--syntax-type: oklch(42% 0.06 250);
+	--syntax-active-line: oklch(19% 0.01 60 / 4%);
+	--syntax-selection: oklch(76% 0.15 76 / 28%);
+
+	--font-display: 'Host Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+	--font-body: var(--font-display);
+	--font-outlier: 'Atkinson Hyperlegible Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+	--radius-card: 12px;
+	--radius-pill: 6px;
+	--radius-chip: 4px;
+	--rule-hair: 1px;
+
+	--shadow-panel: 0 1px 2px oklch(19% 0.01 60 / 6%), 0 0 0 1px oklch(19% 0.01 60 / 3%);
+}
+
+.dark {
+	color-scheme: dark;
+
+	--color-paper: oklch(15.5% 0.008 260);
+	--color-paper-2: oklch(22.5% 0.01 260);
+	--color-paper-3: oklch(19% 0.009 260);
+	--color-hover: oklch(25% 0.011 260);
+
+	--color-ink: oklch(95% 0.005 250);
+	--color-ink-2: oklch(83% 0.008 250);
+	--color-muted: oklch(71% 0.01 250);
+	--color-rule: oklch(26.5% 0.01 260);
+	--color-rule-2: oklch(35% 0.012 260);
+	--color-field-edge: oklch(52% 0.012 250);
+
+	--color-accent: oklch(82% 0.15 80);
+	--color-accent-ink: oklch(18% 0.04 75);
+	--color-accent-text: oklch(82% 0.15 80);
+	--color-accent-soft: oklch(29% 0.05 80);
+	--color-focus: oklch(82% 0.15 80);
+
+	--color-cool: oklch(77% 0.12 245);
+	--color-cool-soft: oklch(29% 0.05 245);
+	--color-ok: oklch(76% 0.15 150);
+	--color-ok-soft: oklch(24.5% 0.03 150);
+	--color-bad: oklch(70% 0.17 25);
+	--color-bad-soft: oklch(24.5% 0.035 25);
+	--color-scrim: oklch(8% 0.006 250 / 60%);
+
+	--syntax-keyword: oklch(77% 0.12 245);
+	--syntax-string: oklch(78% 0.13 150);
+	--syntax-number: oklch(82% 0.12 75);
+	--syntax-type: oklch(80% 0.05 245);
+	--syntax-active-line: oklch(95% 0.005 250 / 4%);
+	--syntax-selection: oklch(82% 0.15 80 / 22%);
+
+	--shadow-panel: 0 1px 3px oklch(5% 0.006 260 / 45%);
+}

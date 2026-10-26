@@ -105,7 +105,7 @@
 			all.push({
 				key: `tab:${t.id}`,
 				label: t.title,
-				detail: `${connections.get(t.connectionId)?.name ?? ''} · ${t.database}`,
+				detail: `${connections.get(t.connectionId)?.name ?? ''} / ${t.database}`,
 				kind: 'Tab',
 				icon:
 					t.kind === 'table' ? TableIcon : t.kind === 'diagram' ? NetworkIcon : SquareTerminalIcon,
@@ -123,7 +123,7 @@
 				all.push({
 					key: `table:${target.key}:${table.schema}.${table.name}`,
 					label: name,
-					detail: multipleTargets ? `${connection?.name} · ${target.database}` : target.database,
+					detail: multipleTargets ? `${connection?.name} / ${target.database}` : target.database,
 					kind: 'Table',
 					icon: TableIcon,
 					color: connection?.color,
@@ -151,7 +151,7 @@
 			all.push({
 				key: `connection:${c.id}`,
 				label: c.name,
-				detail: `${connected ? 'New query' : 'Connect'} · ${c.folder ? `${c.folder} · ` : ''}${c.host}`,
+				detail: `${connected ? 'New query' : 'Connect'}: ${c.folder ? `${c.folder} / ` : ''}${c.host}`,
 				kind: 'Connection',
 				icon: connected ? SquareTerminalIcon : ServerIcon,
 				color: c.color,
@@ -259,8 +259,8 @@
 					data-index={index}
 					class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] {index ===
 					selected
-						? 'bg-accent text-accent-foreground'
-						: ''}"
+						? 'bg-hover text-foreground'
+						: 'text-ink-2'}"
 					onmousemove={() => (selected = index)}
 					onclick={() => choose(item)}
 				>
@@ -272,22 +272,20 @@
 					{#if item.detail}
 						<span class="min-w-0 truncate text-xs text-muted-foreground">{item.detail}</span>
 					{/if}
-					<span class="ml-auto shrink-0 text-[10px] tracking-wide text-muted-foreground uppercase">
+					<span class="ml-auto shrink-0 text-xs text-muted-foreground">
 						{item.kind}
 					</span>
 				</button>
 			{:else}
-				<p class="px-3 py-8 text-center text-sm text-muted-foreground">
+				<p class="px-3 py-6 text-sm text-muted-foreground">
 					{loading > 0 ? 'Loading tables…' : `Nothing matches “${query}”.`}
 				</p>
 			{/each}
 		</div>
-		<div
-			class="flex items-center gap-3 border-t bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground"
-		>
-			<span><kbd class="font-mono">↑↓</kbd> navigate</span>
-			<span><kbd class="font-mono">↵</kbd> open</span>
-			<span><kbd class="font-mono">esc</kbd> close</span>
+		<div class="flex items-center gap-4 border-t bg-chrome px-3 py-2 text-xs text-muted-foreground">
+			<span class="flex items-center gap-1.5"><kbd class="key">↑↓</kbd> navigate</span>
+			<span class="flex items-center gap-1.5"><kbd class="key">↵</kbd> open</span>
+			<span class="flex items-center gap-1.5"><kbd class="key">esc</kbd> close</span>
 		</div>
 	</Dialog.Content>
 </Dialog.Root>

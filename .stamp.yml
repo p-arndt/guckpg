@@ -1,0 +1,12 @@
+project: guckpg
+version:
+  - package.json#version
+  - src-tauri/Cargo.toml#package.version
+  - src-tauri/tauri.conf.json#version
+release:
+  branch: main
+  remote: origin
+  tag: 'v{{version}}'
+hooks:
+  after_write:
+    - cargo update --workspace

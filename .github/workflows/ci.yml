@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    uses: p-arndt/.github/.github/workflows/sveltekit-ci.yml@v1
+    with:
+      build: true
+
+  rust:
+    uses: p-arndt/.github/.github/workflows/rust-ci.yml@v1
+    with:
+      os: '["macos-26", "windows-latest"]'
+
+  rust-format:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: cargo fmt --all --check

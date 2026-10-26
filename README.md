@@ -1,5 +1,18 @@
 # sv
 
+## Releases
+
+Run `just ci` before releasing. Record release notes with `just note`, preview
+with `just release-dry`, and run `just release patch` (or `minor` / `major`)
+from a clean `main` branch. Stamp updates the frontend, Cargo and Tauri versions,
+refreshes Cargo.lock, commits and pushes the release tag. An `origin` remote and
+GitHub authentication must be configured first.
+
+The tag runs CI and builds Windows installers and macOS bundles for Apple Silicon
+and Intel on macOS 26. GitHub creates a draft release with the stamp notes; review
+the completed builds before publishing it. The builds are not code signed or
+notarized, so operating systems may warn when opening them.
+
 Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
 
 ## Creating a project

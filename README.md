@@ -1,19 +1,42 @@
+<div align="center">
+
+<img src="assets/guckpg-icon-transparent.png" alt="guckpg icon" width="180" />
+
 # guckpg
 
-A desktop PostgreSQL client built with Tauri and Svelte.
+**Your PostgreSQL database, in view.**
 
-## Releases
+Browse schemas, write queries, edit data and explore relationships — all from one desktop app.
 
-Run `just ci` before releasing. Record release notes with `just note`, preview
-with `just release-dry`, and run `just release patch` (or `minor` / `major`)
-from a clean `main` branch. Stamp updates the frontend, Cargo and Tauri versions,
-refreshes Cargo.lock, commits and pushes the release tag. An `origin` remote and
-GitHub authentication must be configured first.
+[![CI](https://github.com/p-arndt/guckpg/actions/workflows/ci.yml/badge.svg)](https://github.com/p-arndt/guckpg/actions/workflows/ci.yml)
+[![Release](https://github.com/p-arndt/guckpg/actions/workflows/release.yml/badge.svg)](https://github.com/p-arndt/guckpg/actions/workflows/release.yml)
+[![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://v2.tauri.app/)
+[![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 
-The tag runs CI and builds Windows installers and macOS bundles for Apple Silicon
-and Intel on macOS 26. GitHub creates a draft release with the stamp notes; review
-the completed builds before publishing it. The builds are not code signed or
-notarized, so operating systems may warn when opening them.
+[Install](#get-started) · [Features](#what-you-get) · [Database objects](#database-objects) · [AI assistant](#ai-assistant) · [Development](#development)
+
+</div>
+
+---
+
+## What you get
+
+|                           |                                                                                               |
+| ------------------------- | --------------------------------------------------------------------------------------------- |
+| **Connections**           | Connect directly or through an SSH tunnel, with optional TLS and read-only connections.       |
+| **Object browser**        | Browse schemas and inspect tables, views, routines, triggers and sequences.                   |
+| **SQL and query builder** | Write SQL or build SELECT queries visually, with joins, filters, aggregates and sorting.      |
+| **Data editing**          | Inspect and edit results in a grid or a row form, and save staged changes.                    |
+| **Table designer**        | Edit columns, constraints and indexes, then preview the SQL before applying it.               |
+| **ER diagrams**           | Explore table relationships and foreign keys visually.                                        |
+| **AI assistant**          | Connect Ollama, OpenAI or an OpenAI-compatible endpoint and choose its database access level. |
+
+## Get started
+
+Download an installer from [GitHub Releases](https://github.com/p-arndt/guckpg/releases) for macOS (Apple Silicon or Intel) or Windows. Releases are not signed or notarized, so your operating system may warn when opening them.
+
+Create a connection with your PostgreSQL host, port, database and credentials. Configure TLS or an SSH tunnel if your server requires one, then connect and explore the schemas in the sidebar. Open a query tab to run SQL or use the visual query builder.
 
 ## Database objects
 
@@ -63,16 +86,6 @@ indexes require manual SQL. Type changes rely on PostgreSQL's implicit casts;
 custom conversions need SQL. Default/check expressions reject SQL comments,
 backslashes and dollar quotes.
 
-### Local sample data
-
-The SQL scripts in `dev/` target `public`: run `demo.sql`, optionally
-`demo-performance.sql` for a million orders and three million line items, then
-`demo-erp.sql` for 38 related tables. Feed them to the local container with
-`docker compose exec -T postgres psql -U guckpg -d guckpg < dev/demo.sql`.
-Each seed has a matching `*-check.sql`; `demo-performance-queries.sql` contains
-sample performance queries. `migrate-demo-to-public.sql` moves older demo-schema
-data transactionally and rejects name collisions rather than replacing objects.
-
 ## AI assistant
 
 Open **AI → Settings**, choose a provider, enter its base URL and model, and save:
@@ -83,103 +96,49 @@ Open **AI → Settings**, choose a provider, enter its base URL and model, and s
 | OpenAI Responses API | `https://api.openai.com/v1`  | `/responses`        |
 | OpenAI-compatible    | Your provider's API base URL | `/chat/completions` |
 
-Use a model that supports function calling. API keys are stored in the OS keychain,
-and **Authentication → Basic Auth** supports endpoints behind an authenticated
-proxy, including Ollama. Enter username and password once; both are stored in the
-keychain separately from bearer tokens. Leave both fields blank to keep saved
-credentials, or use the deletion checkbox. Choose **None** to send no authorization
-header. Authentication credentials are
-bound to the provider and endpoint; chat remains in memory. Prompts and inspected
-schema are sent to the configured endpoint. Enable **Allow read-only queries and
-row samples** to let the assistant filter, join, group, sort, and aggregate data
-with COUNT/SUM/AVG/MIN/MAX. It submits a structured query plan: the backend builds
-the SELECT, binds filter parameters, quotes identifiers and checks table access.
-Executed queries and their parameters appear in the tool details.
+Use a model that supports function calling. API keys and optional Basic Auth credentials are stored in the OS keychain, bound to the provider and endpoint. Chat stays in memory; prompts, tool results and inspected schema are sent to the configured endpoint.
 
-Reads use isolated read-only transactions, a 5-second statement timeout, bounded
-results (100 rows, 32 columns, 64 KiB output), and a small allowlist of built-in
-types, operators and aggregates. Views, RLS tables, system schemas, custom types,
-custom access methods and expression/partial indexes are rejected to avoid
-indirect code execution. Inherited rows are excluded with `ONLY`. Sample reads
-use the same relation/type checks. These restrictions cannot protect against a
-compromised database server; use a dedicated SELECT-only DB user for an additional
-permission boundary. Read-only queries can still scan large tables until timeout.
+Choose an access level in the AI panel: **Schema only**, **Read data**, **Approve every action**, or **Read & write**. Read data can run SQL automatically in a read-only transaction; database functions may still have external side effects. Approve every action asks before database access and changes. Read & write requires approval for each proposed change. Read-only connections do not permit AI writes. Use database permissions appropriate for the access you grant.
 
-Switching databases, changing settings, or clearing chat revokes data access.
-Suggested free-form SQL opens in a new editor tab for manual review; the assistant
-cannot execute arbitrary SQL, call arbitrary functions or modify data.
+## Development
 
-The Rust adapters handle protocol-specific tool calls; OpenAI uses stateless
-Responses requests with reasoning items preserved during each tool loop. Requests
-are cancellable and bounded by time, response size, and tool-call count. This first
-version displays complete replies rather than streaming tokens.
-
-Run frontend checks with `pnpm check`, `pnpm test`, `pnpm lint`, and `pnpm build`;
-Rust checks with `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-and `cargo test`. A dedicated AI database test is ignored by default: point
-`GUCKPG_AI_TEST_PORT` at a **disposable localhost** Postgres containing an empty
-`guckpg_ai_test` database and run
-`cargo test ai:: -- --ignored`.
-
-## Desktop development
-
-Run `pnpm tauri:dev` to start the desktop app. On macOS, if a code-signing
-identity named `guckpg Local Development Code Signing` exists, this command signs
-the debug executable before launch. Existing keychain items may still require
-access approval.
-Without that identity, the development build runs without this signing step.
-
-## Svelte development
-
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
-
-## Creating a project
-
-If you're seeing this, you've probably already done this step. Congrats!
+You need Node.js 24, pnpm 12, Rust 1.90 or newer, and the [Tauri 2 system prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform. Docker is optional for the local PostgreSQL and SSH test services.
 
 ```sh
-# create a new project
-npx sv create my-app
+pnpm install --frozen-lockfile
+pnpm tauri:dev
 ```
 
-To recreate this project with the same configuration:
+On macOS, `tauri:dev` signs the debug executable if a code-signing identity named `guckpg Local Development Code Signing` exists. Keychain access may still require approval. Without that identity, the development build runs unsigned.
+
+Run the full local checks with:
 
 ```sh
-# recreate this project
-pnpm dlx sv@1.1.1 create --template minimal --types ts --add prettier eslint vitest="usages:unit" tailwindcss="plugins:none" sveltekit-adapter="adapter:static" experimental="features:none" --install pnpm .
+just ci
 ```
 
-## Adding features
+This runs frontend type checking, linting, tests and a build, followed by Rust formatting, Clippy and tests. To build desktop bundles locally, run `pnpm tauri build`.
 
-Add features to your project with `sv add`:
+### Sample data
+
+Start the local database with `docker compose up -d postgres`. The SQL scripts in `dev/` target `public`: run `demo.sql`, optionally
+`demo-performance.sql` for a million orders and three million line items, then
+`demo-erp.sql` for 38 related tables. Feed them to the local container with
+`docker compose exec -T postgres psql -U guckpg -d guckpg < dev/demo.sql`.
+Each seed has a matching `*-check.sql`; `demo-performance-queries.sql` contains
+sample performance queries. `migrate-demo-to-public.sql` moves older demo-schema
+data transactionally and rejects name collisions rather than replacing objects.
+
+### AI database tests
+
+A dedicated AI database test is ignored by default. Point `GUCKPG_AI_TEST_PORT` at a **disposable localhost** PostgreSQL instance containing an empty `guckpg_ai_test` database, then run:
 
 ```sh
-npx sv add
+cargo test ai:: -- --ignored
 ```
 
-For example, to add Tailwind CSS:
+## Releasing
 
-```sh
-npx sv add tailwindcss
-```
+Run `just ci` before releasing. Record release notes with `just note`, preview with `just release-dry`, and run `just release patch` (or `minor` / `major`) from a clean `main` branch. Stamp updates the frontend, Cargo and Tauri versions, refreshes `Cargo.lock`, commits and pushes the release tag. An `origin` remote and GitHub authentication must be configured first.
 
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
+The tag runs CI and builds Windows installers and macOS bundles for Apple Silicon and Intel. GitHub creates a draft release with the stamp notes; review the completed builds before publishing it.

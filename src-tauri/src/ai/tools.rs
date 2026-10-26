@@ -1,4 +1,4 @@
-//! Database inspection and structured reads. Model input never supplies executable SQL.
+//! Database inspection, structured reads, and user-approved write proposals.
 
 use serde_json::{Value, json};
 use tokio_postgres::types::Type;
@@ -31,6 +31,24 @@ pub fn definitions(allow_data: bool) -> Vec<Value> {
         tools.push(super::query::definition());
     }
     tools
+}
+
+pub fn write_definition() -> Value {
+    json!({"type":"function", "function": {"name":"propose_write", "description":"Propose a single SQL statement for explicit user review and approval. Do not include multiple statements. Execution occurs only after approval.", "parameters":{"type":"object", "properties":{"sql":{"type":"string", "minLength":1, "maxLength":16384}}, "required":["sql"], "additionalProperties":false}}})
+}
+
+pub fn write_sql(arguments: &Value) -> AppResult<&str> {
+    let object = arguments
+        .as_object()
+        .ok_or_else(|| AppError::msg("Invalid write request"))?;
+    let sql = object
+        .get("sql")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::msg("Invalid write request"))?;
+    if object.len() != 1 || sql.trim().is_empty() || sql.len() > 16_384 || sql.contains('\0') {
+        return Err(AppError::msg("Invalid write request"));
+    }
+    Ok(sql)
 }
 
 fn definition(name: &str, description: &str, fields: &[&str]) -> Value {
@@ -142,17 +160,16 @@ async fn inspect(conn: &crate::pg::PgConn, name: &str, fields: &[&str]) -> AppRe
             "sample_rows" => {
                 let checked = super::query::table_columns(conn, fields[0], fields[1]).await?;
                 let columns = catalog::columns(&conn.client, fields[0], fields[1]).await?;
-                if columns
+                // One enum or array column should not hide the rest of the table; only
+                // built-in scalar types are rendered, the others are named instead.
+                let (columns, omitted): (Vec<_>, Vec<_>) = columns
                     .iter()
-                    .any(|column| !checked.contains_key(&column.name))
-                {
-                    return Err(AppError::msg(
-                        "AI query: samples require built-in scalar column types",
-                    ));
-                }
+                    .partition(|column| checked.contains_key(&column.name));
+                let omitted: Vec<&str> = omitted.iter().map(|c| c.name.as_str()).collect();
 
                 if columns.is_empty() {
-                    return Ok(json!({"columns": [], "rows": [], "limit": SAMPLE_ROWS}));
+                    return Ok(json!({"columns": [], "rows": [], "limit": SAMPLE_ROWS,
+                        "omittedColumns": omitted}));
                 }
                 let names: Vec<&str> = columns
                     .iter()
@@ -170,6 +187,7 @@ async fn inspect(conn: &crate::pg::PgConn, name: &str, fields: &[&str]) -> AppRe
                 Ok(
                     json!({"columns": set.columns, "rows": set.rows, "limit": SAMPLE_ROWS,
                     "columnsTruncated": columns.len() > SAMPLE_COLUMNS,
+                    "omittedColumns": omitted,
                     "valuesMayBeTruncated": true, "order": "unspecified"}),
                 )
             }
@@ -383,6 +401,23 @@ mod tests {
             .unwrap()
             .get(0);
         assert_eq!(read_only, "off");
+    }
+
+    #[test]
+    fn write_proposals_require_one_bounded_sql_field() {
+        assert_eq!(
+            write_sql(&json!({"sql":"UPDATE t SET x = 1"})).unwrap(),
+            "UPDATE t SET x = 1"
+        );
+        for value in [
+            json!({}),
+            json!({"sql":" "}),
+            json!({"sql":"a\0b"}),
+            json!({"sql":"UPDATE t SET x=1", "extra":true}),
+            json!({"sql":"x".repeat(16_385)}),
+        ] {
+            assert!(write_sql(&value).is_err());
+        }
     }
 
     #[test]

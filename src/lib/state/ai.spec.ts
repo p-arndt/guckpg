@@ -27,11 +27,67 @@ beforeEach(() => {
 });
 
 describe('chat isolation', () => {
+	it('shows thinking and tools in order and approves each write only once', async () => {
+		const pending = deferred<AiReply>();
+		vi.spyOn(aiApi, 'chat').mockReturnValue(pending.promise);
+		vi.spyOn(aiApi, 'decideWrite').mockResolvedValue();
+		const state = chat();
+		state.setAccess('write');
+		const sent = state.send('Change a row');
+		const [request, event] = vi.mocked(aiApi.chat).mock.calls[0];
+		expect(request).toMatchObject({ allowData: true, allowWrite: true });
+		event({ type: 'thinking', text: 'First' });
+		event({ type: 'toolStarted', name: 'list_tables' });
+		event({ type: 'toolFinished', summary: 'Completed', detail: '{"tables": []}' });
+		expect(state.activity.at(-1)).toMatchObject({ summary: 'Completed', detail: '{"tables": []}' });
+		event({ type: 'thinking', text: 'Next' });
+		event({ type: 'toolStarted', name: 'propose_write' });
+		event({ type: 'approval', id: 'approval', sql: 'UPDATE test SET value = 1' });
+		expect(state.activity.map((item) => item.type)).toEqual([
+			'thinking',
+			'tool',
+			'thinking',
+			'tool'
+		]);
+		await state.decideWrite('approval', true);
+		await state.decideWrite('approval', true);
+		expect(aiApi.decideWrite).toHaveBeenCalledTimes(1);
+		expect(aiApi.decideWrite).toHaveBeenCalledWith(request.requestId, 'approval', true);
+		event({ type: 'toolFinished', summary: 'Completed · 1 rows affected' });
+		pending.resolve({ text: 'Done', tools: [] });
+		await sent;
+		expect(state.messages.at(-1)?.activity).toHaveLength(4);
+		event({ type: 'thinking', text: 'late' });
+		expect(state.activity).toEqual([]);
+	});
+	it('maps access levels onto read and write permissions', () => {
+		const state = chat();
+		expect(state.access).toBe('schema');
+		state.setAccess('write');
+		expect(state.allowData).toBe(true);
+		expect(state.allowWrite).toBe(true);
+		expect(state.access).toBe('write');
+		state.setAccess('read');
+		expect(state.allowData).toBe(true);
+		expect(state.allowWrite).toBe(false);
+		state.setAccess('schema');
+		expect(state.allowData).toBe(false);
+		expect(state.allowWrite).toBe(false);
+	});
+	it('clears the chat only when the access level changes', () => {
+		const state = chat();
+		state.setAccess('read');
+		state.messages = [{ role: 'user', content: 'hi' }];
+		state.setAccess('read');
+		expect(state.messages).toHaveLength(1);
+		state.setAccess('write');
+		expect(state.messages).toEqual([]);
+	});
 	it('pins each request and ignores a reply after database changes', async () => {
 		const pending = deferred<AiReply>();
 		vi.spyOn(aiApi, 'chat').mockReturnValue(pending.promise);
 		const state = chat();
-		state.setAllowData(true);
+		state.setAccess('read');
 		const first = state.send('Explain tables');
 		const request = vi.mocked(aiApi.chat).mock.calls[0][0];
 		expect(request).toMatchObject({ connectionId: 'one', database: 'db', allowData: true });
@@ -68,10 +124,10 @@ describe('chat isolation', () => {
 	it('clears sampled history when data permission is revoked', async () => {
 		vi.spyOn(aiApi, 'chat').mockResolvedValue({ text: 'Sampled row', tools: [] });
 		const state = chat();
-		state.setAllowData(true);
+		state.setAccess('read');
 		await state.send('Example');
 		expect(vi.mocked(aiApi.chat).mock.calls[0][0].allowData).toBe(true);
-		state.setAllowData(false);
+		state.setAccess('schema');
 		expect(state.messages).toEqual([]);
 		expect(state.allowData).toBe(false);
 	});

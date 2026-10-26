@@ -31,7 +31,7 @@ pub struct BasicAuth {
 }
 
 impl BasicAuth {
-    fn validate(&self) -> AppResult<()> {
+    pub(super) fn validate(&self) -> AppResult<()> {
         if self.username.is_empty()
             || self.username.contains(':')
             || self.username.chars().any(char::is_control)

@@ -99,21 +99,26 @@ impl Conversation {
                     "tools": tools,
                     "store": false,
                     "include": ["reasoning.encrypted_content"],
-                    "stream": false
+                    "stream": true
                 })
             }
             ProviderKind::Ollama => json!({
                 "model": self.config.model, "messages": self.history,
-                "tools": tools, "stream": false
+                "tools": tools, "stream": true
             }),
             ProviderKind::OpenaiCompatible => json!({
                 "model": self.config.model, "messages": self.history,
-                "tools": tools, "stream": false
+                "tools": tools, "stream": true
             }),
         }
     }
 
-    pub async fn complete(&mut self, tools: &[Value]) -> AppResult<Turn> {
+    pub async fn complete(
+        &mut self,
+        tools: &[Value],
+        on_thinking: &impl Fn(String),
+        on_text: &impl Fn(String),
+    ) -> AppResult<Turn> {
         let suffix = match self.config.provider {
             ProviderKind::Ollama => "api/chat",
             ProviderKind::OpenaiResponses => "responses",
@@ -151,18 +156,60 @@ impl Conversation {
             ));
         }
         let mut bytes = Vec::new();
+        let mut total = 0usize;
+        let mut streamed = match self.config.provider {
+            ProviderKind::Ollama => json!({"message": {"role": "assistant", "content": ""}}),
+            ProviderKind::OpenaiCompatible => {
+                json!({"choices": [{"message": {"role": "assistant", "content": ""}}]})
+            }
+            ProviderKind::OpenaiResponses => Value::Null,
+        };
+        let mut event_data = String::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk =
                 chunk.map_err(|_| AppError::msg("Could not read the AI provider response."))?;
-            if chunk.len() > MAX_RESPONSE_BYTES - bytes.len() {
+            if chunk.len() > MAX_RESPONSE_BYTES - total {
                 return Err(AppError::msg(
                     "The AI provider response exceeded the size limit.",
                 ));
             }
+            total += chunk.len();
             bytes.extend_from_slice(&chunk);
+            while let Some(end) = bytes.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = bytes.drain(..=end).collect();
+                if self.config.provider == ProviderKind::Ollama {
+                    let part: Value = serde_json::from_slice(&line).map_err(|_| malformed())?;
+                    merge_ollama_chunk(&mut streamed, part, on_thinking, on_text)?;
+                } else {
+                    process_sse_line(
+                        &line,
+                        &mut event_data,
+                        self.config.provider,
+                        &mut streamed,
+                        on_text,
+                    )?;
+                }
+            }
         }
-        let value: Value = serde_json::from_slice(&bytes).map_err(|_| malformed())?;
+        if !bytes.is_empty() {
+            if self.config.provider == ProviderKind::Ollama {
+                let part = serde_json::from_slice(&bytes).map_err(|_| malformed())?;
+                merge_ollama_chunk(&mut streamed, part, on_thinking, on_text)?;
+            } else {
+                process_sse_line(
+                    &bytes,
+                    &mut event_data,
+                    self.config.provider,
+                    &mut streamed,
+                    on_text,
+                )?;
+            }
+        }
+        if !event_data.is_empty() {
+            process_sse_event(&event_data, self.config.provider, &mut streamed, on_text)?;
+        }
+        let value = streamed;
         self.accept(value)
     }
 
@@ -312,6 +359,218 @@ impl Conversation {
     }
 }
 
+fn merge_ollama_chunk(
+    result: &mut Value,
+    part: Value,
+    on_thinking: &impl Fn(String),
+    on_text: &impl Fn(String),
+) -> AppResult<()> {
+    if let Some(thinking) = part["message"]["thinking"].as_str() {
+        on_thinking(thinking.to_string());
+    }
+    if let Some(content) = part["message"]["content"].as_str() {
+        if !content.is_empty() {
+            on_text(content.to_string());
+        }
+        let current = result["message"]["content"]
+            .as_str()
+            .ok_or_else(malformed)?;
+        result["message"]["content"] = json!(format!("{current}{content}"));
+    }
+    if let Some(calls) = part["message"].get("tool_calls") {
+        let existing = result["message"]
+            .as_object_mut()
+            .ok_or_else(malformed)?
+            .entry("tool_calls")
+            .or_insert_with(|| json!([]));
+        existing
+            .as_array_mut()
+            .ok_or_else(malformed)?
+            .extend(calls.as_array().ok_or_else(malformed)?.iter().cloned());
+    }
+    if part["done"] == true {
+        result["done"] = json!(true);
+        if let Some(reason) = part.get("done_reason") {
+            result["done_reason"] = reason.clone();
+        }
+    }
+    Ok(())
+}
+
+fn process_sse_line(
+    line: &[u8],
+    data: &mut String,
+    provider: ProviderKind,
+    result: &mut Value,
+    on_text: &impl Fn(String),
+) -> AppResult<()> {
+    let line = std::str::from_utf8(line)
+        .map_err(|_| malformed())?
+        .trim_end_matches(['\r', '\n']);
+    if line.is_empty() {
+        if !data.is_empty() {
+            process_sse_event(data, provider, result, on_text)?;
+            data.clear();
+        }
+    } else if let Some(value) = line.strip_prefix("data:") {
+        if !data.is_empty() {
+            data.push('\n');
+        }
+        data.push_str(value.strip_prefix(' ').unwrap_or(value));
+    }
+    Ok(())
+}
+
+fn process_sse_event(
+    data: &str,
+    provider: ProviderKind,
+    result: &mut Value,
+    on_text: &impl Fn(String),
+) -> AppResult<()> {
+    if data == "[DONE]" {
+        return Ok(());
+    }
+    let event: Value = serde_json::from_str(data).map_err(|_| malformed())?;
+    match provider {
+        ProviderKind::OpenaiResponses => match event["type"].as_str() {
+            Some("response.output_text.delta" | "response.refusal.delta") => {
+                let text = event["delta"].as_str().ok_or_else(malformed)?;
+                if !text.is_empty() {
+                    on_text(text.to_string());
+                }
+            }
+            Some("response.completed") => {
+                *result = event.get("response").ok_or_else(malformed)?.clone();
+            }
+            Some("response.failed" | "response.incomplete" | "error") => {
+                return Err(AppError::msg(
+                    "The AI provider did not complete its response. Try again.",
+                ));
+            }
+            _ => {}
+        },
+        ProviderKind::OpenaiCompatible => merge_chat_chunk(result, &event, on_text)?,
+        ProviderKind::Ollama => return Err(malformed()),
+    }
+    Ok(())
+}
+
+fn merge_chat_chunk(result: &mut Value, event: &Value, on_text: &impl Fn(String)) -> AppResult<()> {
+    if event.get("error").is_some() {
+        return Err(AppError::msg(
+            "The AI provider could not complete the request.",
+        ));
+    }
+    let choices = event["choices"].as_array().ok_or_else(malformed)?;
+    if choices.is_empty() {
+        return Ok(());
+    }
+    if choices.len() != 1 || choices[0]["index"].as_u64().unwrap_or(0) != 0 {
+        return Err(malformed());
+    }
+    let choice = &choices[0];
+    let delta = &choice["delta"];
+    if delta
+        .get("role")
+        .and_then(Value::as_str)
+        .is_some_and(|role| role != "assistant")
+    {
+        return Err(malformed());
+    }
+    for field in ["content", "refusal"] {
+        if let Some(text) = delta[field].as_str() {
+            let existing = result["choices"][0]["message"]["content"]
+                .as_str()
+                .ok_or_else(malformed)?;
+            result["choices"][0]["message"]["content"] = json!(format!("{existing}{text}"));
+            if !text.is_empty() {
+                on_text(text.to_string());
+            }
+        }
+    }
+    if let Some(calls) = delta.get("tool_calls").filter(|v| !v.is_null()) {
+        for call in calls.as_array().ok_or_else(malformed)? {
+            let index = call["index"].as_u64().ok_or_else(malformed)? as usize;
+            if index >= 128 {
+                return Err(malformed());
+            }
+            let message = result["choices"][0]["message"]
+                .as_object_mut()
+                .ok_or_else(malformed)?;
+            let calls = message
+                .entry("tool_calls")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .ok_or_else(malformed)?;
+            while calls.len() <= index {
+                calls.push(
+                    json!({"id":"", "type":"function", "function":{"name":"", "arguments":""}}),
+                );
+            }
+            let target = &mut calls[index];
+            for (source, target_field) in [("id", "id"), ("type", "type")] {
+                if let Some(value) = call[source].as_str() {
+                    target[target_field] = json!(value);
+                }
+            }
+            for field in ["name", "arguments"] {
+                if let Some(value) = call["function"][field].as_str() {
+                    let old = target["function"][field].as_str().ok_or_else(malformed)?;
+                    target["function"][field] = json!(format!("{old}{value}"));
+                }
+            }
+        }
+    }
+    if !choice["finish_reason"].is_null() {
+        result["choices"][0]["finish_reason"] = choice["finish_reason"].clone();
+    }
+    Ok(())
+}
+
+pub async fn ollama_models(config: &AiConfig, auth: RequestAuth) -> AppResult<Vec<String>> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let endpoint = format!("{}/api/tags", config.url()?.as_str().trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|_| AppError::msg("Could not initialize the AI HTTP client."))?;
+    let request = client.get(endpoint);
+    let request = match auth {
+        RequestAuth::None => request,
+        RequestAuth::Bearer(key) => request.bearer_auth(key),
+        RequestAuth::Basic(basic) => request.basic_auth(basic.username, Some(basic.password)),
+    };
+    let response = request
+        .send()
+        .await
+        .map_err(|_| AppError::msg("Could not contact Ollama. Check the URL and connection."))?;
+    if !response.status().is_success() {
+        return Err(AppError::msg(format!(
+            "Ollama returned HTTP {}.",
+            response.status().as_u16()
+        )));
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| malformed())?;
+        if chunk.len() > MAX_RESPONSE_BYTES - bytes.len() {
+            return Err(AppError::msg(
+                "The AI provider response exceeded the size limit.",
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let value: Value = serde_json::from_slice(&bytes).map_err(|_| malformed())?;
+    value["models"]
+        .as_array()
+        .ok_or_else(malformed)?
+        .iter()
+        .map(|model| Ok(required_string(model, "name")?.to_string()))
+        .collect()
+}
+
 fn parse_arguments(value: &Value, string: bool) -> AppResult<Value> {
     let arguments = if string {
         serde_json::from_str(value.as_str().ok_or_else(malformed)?).map_err(|_| malformed())?
@@ -362,6 +621,164 @@ mod tests {
         vec![
             json!({"type": "function", "function": {"name": "query", "description": "Read rows", "parameters": {"type": "object", "properties": {}}}}),
         ]
+    }
+
+    #[test]
+    fn ollama_stream_combines_thinking_content_and_tool_calls() {
+        let mut result = json!({"message": {"role": "assistant", "content": ""}});
+        let thinking = std::cell::RefCell::new(String::new());
+        let on_thinking = |text: String| thinking.borrow_mut().push_str(&text);
+        merge_ollama_chunk(
+            &mut result,
+            json!({"message": {"thinking": "first", "content": "hello "}}),
+            &on_thinking,
+            &|_| {},
+        )
+        .unwrap();
+        merge_ollama_chunk(&mut result, json!({"message": {"thinking": " second", "content": "world", "tool_calls": [{"function": {"name": "query", "arguments": {}}}]}, "done": true}), &on_thinking, &|_| {}).unwrap();
+        assert_eq!(*thinking.borrow(), "first second");
+        let mut conversation = conversation(ProviderKind::Ollama);
+        let turn = conversation.accept(result).unwrap();
+        assert_eq!(turn.text, "hello world");
+        assert_eq!(turn.calls.len(), 1);
+    }
+
+    #[test]
+    fn sse_streams_text_and_reassembles_fragmented_tool_calls() {
+        let chunks = std::cell::RefCell::new(Vec::new());
+        let on_text = |text: String| chunks.borrow_mut().push(text);
+        let mut compatible =
+            json!({"choices": [{"message": {"role": "assistant", "content": ""}}]});
+        for event in [
+            json!({"choices":[{"index":0,"delta":{"content":"Hi "}}]}),
+            json!({"choices":[{"index":0,"delta":{"content":"there", "tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":"que","arguments":"{\"sql\":"}}]}}]}),
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"ry","arguments":"\"select 1\"}"}}]},"finish_reason":"tool_calls"}]}),
+        ] {
+            process_sse_event(
+                &event.to_string(),
+                ProviderKind::OpenaiCompatible,
+                &mut compatible,
+                &on_text,
+            )
+            .unwrap();
+        }
+        let mut chat = conversation(ProviderKind::OpenaiCompatible);
+        let turn = chat.accept(compatible).unwrap();
+        assert_eq!(*chunks.borrow(), vec!["Hi ", "there"]);
+        assert_eq!(turn.text, "Hi there");
+        assert_eq!(turn.calls[0].name, "query");
+        assert_eq!(turn.calls[0].arguments["sql"], "select 1");
+
+        let mut responses = Value::Null;
+        let output = json!([{"type":"reasoning", "id":"r1", "encrypted_content":"secret"}, {"type":"function_call", "call_id":"c1", "name":"query", "arguments":"{}", "status":"completed"}]);
+        process_sse_event(
+            &json!({"type":"response.output_text.delta","delta":"live"}).to_string(),
+            ProviderKind::OpenaiResponses,
+            &mut responses,
+            &on_text,
+        )
+        .unwrap();
+        process_sse_event(&json!({"type":"response.completed","response":{"status":"completed", "output":output}}).to_string(), ProviderKind::OpenaiResponses, &mut responses, &on_text).unwrap();
+        let mut conversation = conversation(ProviderKind::OpenaiResponses);
+        let turn = conversation.accept(responses).unwrap();
+        assert_eq!(turn.calls.len(), 1);
+        assert_eq!(conversation.history.last().unwrap()["call_id"], "c1");
+        assert_eq!(chunks.borrow().last().unwrap(), "live");
+        assert!(
+            process_sse_event(
+                &json!({"type":"response.failed"}).to_string(),
+                ProviderKind::OpenaiResponses,
+                &mut Value::Null,
+                &on_text
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn streams_each_provider_before_the_response_finishes() {
+        use tokio::sync::oneshot;
+        for provider in [
+            ProviderKind::Ollama,
+            ProviderKind::OpenaiCompatible,
+            ProviderKind::OpenaiResponses,
+        ] {
+            let (first, last) = match provider {
+                ProviderKind::Ollama => (
+                    json!({"message":{"role":"assistant","content":"Hällo"},"done":false})
+                        .to_string()
+                        + "\n",
+                    json!({"message":{"role":"assistant","content":"!"},"done":true}).to_string()
+                        + "\n",
+                ),
+                ProviderKind::OpenaiCompatible => (
+                    format!(
+                        "data: {}\r\n\r\n",
+                        json!({"choices":[{"index":0,"delta":{"content":"Hällo"},"finish_reason":null}]})
+                    ),
+                    format!(
+                        "data: {}\r\n\r\ndata: [DONE]\r\n\r\n",
+                        json!({"choices":[{"index":0,"delta":{"content":"!"},"finish_reason":"stop"}]})
+                    ),
+                ),
+                ProviderKind::OpenaiResponses => (
+                    format!(
+                        "data: {}\n\n",
+                        json!({"type":"response.output_text.delta","delta":"Hällo"})
+                    ),
+                    format!(
+                        "data: {}\n\ndata: {}\n\n",
+                        json!({"type":"response.output_text.delta","delta":"!"}),
+                        json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hällo!"}]}]}})
+                    ),
+                ),
+            };
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (proceed, wait) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 8192];
+                let count = socket.read(&mut request).await.unwrap();
+                assert!(count > 0);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    first.len() + last.len()
+                );
+                socket.write_all(header.as_bytes()).await.unwrap();
+                let split = first.find('ä').unwrap() + 1;
+                socket.write_all(&first.as_bytes()[..split]).await.unwrap();
+                socket.write_all(&first.as_bytes()[split..]).await.unwrap();
+                wait.await.unwrap();
+                socket.write_all(last.as_bytes()).await.unwrap();
+            });
+            let (seen, received) = oneshot::channel();
+            let seen = std::cell::RefCell::new(Some(seen));
+            let mut chat = conversation(provider);
+            chat.config.base_url = format!("http://{address}");
+            let task = async {
+                let result = chat
+                    .complete(&tools(), &|_| {}, &|text| {
+                        if text == "Hällo"
+                            && let Some(sender) = seen.borrow_mut().take()
+                        {
+                            let _ = sender.send(());
+                        }
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(result.text, "Hällo!");
+            };
+            let release = async {
+                tokio::time::timeout(Duration::from_secs(2), received)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                proceed.send(()).unwrap();
+            };
+            tokio::join!(task, release);
+            server.await.unwrap();
+        }
     }
 
     #[test]
@@ -466,6 +883,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ollama_models_uses_tags_endpoint_and_saved_auth() {
+        let (url, server) = mock_response(
+            "200 OK",
+            json!({"models": [{"name": "one:latest"}, {"name": "two"}]}).to_string(),
+        )
+        .await;
+        let config = AiConfig {
+            base_url: url,
+            ..Default::default()
+        };
+        assert_eq!(
+            ollama_models(&config, RequestAuth::Bearer("test-key".into()))
+                .await
+                .unwrap(),
+            vec!["one:latest", "two"]
+        );
+        let request = server.await.unwrap();
+        assert!(request.starts_with("GET /api/tags HTTP/1.1"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-key")
+        );
+    }
+
+    #[tokio::test]
+    async fn ollama_models_sends_basic_auth() {
+        let (url, server) = mock_response("200 OK", json!({"models": []}).to_string()).await;
+        let config = AiConfig {
+            base_url: url,
+            ..Default::default()
+        };
+        let auth = RequestAuth::Basic(super::super::settings::BasicAuth {
+            username: "user".into(),
+            password: "pass".into(),
+        });
+        assert!(ollama_models(&config, auth).await.unwrap().is_empty());
+        let request = server.await.unwrap();
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: basic dxnlcjpwyxnz")
+        );
+    }
+
+    #[tokio::test]
     async fn sends_native_endpoints_and_protocol_bodies() {
         for (provider, path, body) in [
             (
@@ -476,15 +939,20 @@ mod tests {
             (
                 ProviderKind::OpenaiCompatible,
                 "/v1/chat/completions",
-                json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "answer"}}]}),
+                json!({"choices": [{"index":0, "finish_reason": "stop", "delta": {"content": "answer"}}]}),
             ),
             (
                 ProviderKind::OpenaiResponses,
                 "/v1/responses",
-                json!({"status": "completed", "output": [{"type": "message", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": "answer"}]}]}),
+                json!({"type":"response.completed", "response":{"status": "completed", "output": [{"type": "message", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": "answer"}]}]}}),
             ),
         ] {
-            let (url, server) = mock_response("200 OK", body.to_string()).await;
+            let payload = if provider == ProviderKind::Ollama {
+                body.to_string()
+            } else {
+                format!("data: {body}\n\n")
+            };
+            let (url, server) = mock_response("200 OK", payload).await;
             let mut conversation = conversation(provider);
             conversation.config.base_url = if provider == ProviderKind::Ollama {
                 url
@@ -493,7 +961,11 @@ mod tests {
             };
             conversation.auth = RequestAuth::Bearer("test-key".into());
             assert_eq!(
-                conversation.complete(&tools()).await.unwrap().text,
+                conversation
+                    .complete(&tools(), &|_| {}, &|_| {})
+                    .await
+                    .unwrap()
+                    .text,
                 "answer"
             );
             let request = server.await.unwrap();
@@ -505,7 +977,7 @@ mod tests {
             );
             let body: Value =
                 serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-            assert_eq!(body["stream"], false);
+            assert_eq!(body["stream"], true);
             assert_eq!(body["model"], "test-model");
         }
     }
@@ -524,7 +996,7 @@ mod tests {
                 username: "user".into(),
                 password: "pass".into(),
             });
-            assert!(conversation.complete(&[]).await.is_err());
+            assert!(conversation.complete(&[], &|_| {}, &|_| {}).await.is_err());
             let request = server.await.unwrap().to_ascii_lowercase();
             let (headers, body) = request.split_once("\r\n\r\n").unwrap();
             assert_eq!(headers.matches("authorization:").count(), 1);
@@ -535,7 +1007,7 @@ mod tests {
         let (url, server) = mock_response("401 Unauthorized", "".into()).await;
         let mut conversation = conversation(ProviderKind::Ollama);
         conversation.config.base_url = url;
-        assert!(conversation.complete(&[]).await.is_err());
+        assert!(conversation.complete(&[], &|_| {}, &|_| {}).await.is_err());
         assert!(
             !server
                 .await
@@ -554,7 +1026,12 @@ mod tests {
         .await;
         let mut conversation = conversation(ProviderKind::Ollama);
         conversation.config.base_url = url;
-        let error = conversation.complete(&[]).await.err().unwrap().to_string();
+        let error = conversation
+            .complete(&[], &|_| {}, &|_| {})
+            .await
+            .err()
+            .unwrap()
+            .to_string();
         assert!(error.contains("302"));
         assert!(!error.contains("private-provider-error"));
         server.await.unwrap();
@@ -575,7 +1052,12 @@ mod tests {
             let (url, server) = mock_http(response).await;
             let mut conversation = conversation(ProviderKind::Ollama);
             conversation.config.base_url = url;
-            let error = conversation.complete(&[]).await.err().unwrap().to_string();
+            let error = conversation
+                .complete(&[], &|_| {}, &|_| {})
+                .await
+                .err()
+                .unwrap()
+                .to_string();
             assert!(error.contains("size limit"));
             server.await.unwrap();
         }

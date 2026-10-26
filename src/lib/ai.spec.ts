@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
-import { aiApi, defaultAiConfig, extractSqlBlocks } from './ai';
+import {
+	aiApi,
+	defaultAiConfig,
+	extractSqlBlocks,
+	splitApprovals,
+	currentActivityLabel,
+	completedActivityCount,
+	toolOutcome,
+	approvalOutcome,
+	thinkingPreview
+} from './ai';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
@@ -35,6 +45,22 @@ describe('provider settings', () => {
 		expect(defaultAiConfig('openaiResponses').baseUrl).toBe('https://api.openai.com/v1');
 		expect(defaultAiConfig('openaiCompatible').provider).toBe('openaiCompatible');
 	});
+	it('loads Ollama models with saved credentials by default and accepts unsaved credentials', async () => {
+		const config = { ...defaultAiConfig(), authMode: 'basic' as const };
+		await aiApi.models(config);
+		expect(invoke).toHaveBeenLastCalledWith('ai_ollama_models', {
+			config,
+			apiKey: undefined,
+			basicAuth: undefined
+		});
+		const basicAuth = { username: 'user', password: 'pass' };
+		await aiApi.models(config, undefined, basicAuth);
+		expect(invoke).toHaveBeenLastCalledWith('ai_ollama_models', {
+			config,
+			apiKey: undefined,
+			basicAuth
+		});
+	});
 	it('distinguishes preserving and deleting a saved key', async () => {
 		await aiApi.saveSettings(defaultAiConfig());
 		expect(invoke).toHaveBeenLastCalledWith('ai_save_settings', { config: defaultAiConfig() });
@@ -58,5 +84,130 @@ describe('provider settings', () => {
 			config,
 			basicAuth: { username: '', password: '' }
 		});
+	});
+});
+
+describe('activity grouping', () => {
+	it('keeps activity order and keeps pending and resolved approvals outside the group', () => {
+		const thinking = { type: 'thinking' as const, text: 'thinking' };
+		const read = { type: 'tool' as const, name: 'query_rows', summary: 'Completed' };
+		const pending = {
+			type: 'tool' as const,
+			name: 'propose_write',
+			summary: null,
+			approval: { id: 'one', sql: 'DELETE FROM t' }
+		};
+		expect(splitApprovals([thinking, read, pending])).toEqual({
+			history: [thinking, read],
+			approvals: [pending]
+		});
+		const complete = { ...pending, summary: 'Completed · 1 rows affected' };
+		const later = { type: 'tool' as const, name: 'list_tables', summary: 'Completed' };
+		expect(splitApprovals([thinking, read, complete, later])).toEqual({
+			history: [thinking, read, later],
+			approvals: [complete]
+		});
+	});
+});
+
+describe('tool outcome', () => {
+	it('reports running tools and strips the completed prefix', () => {
+		expect(toolOutcome(null)).toEqual({ state: 'running', label: '', details: '' });
+		expect(toolOutcome('Completed')).toEqual({ state: 'done', label: '', details: '' });
+		expect(toolOutcome('Completed · 3 rows affected').label).toBe('3 rows affected');
+	});
+	it('splits multi-line summaries into a headline and details', () => {
+		expect(toolOutcome('Completed\nSELECT 1\nParameters: []')).toEqual({
+			state: 'done',
+			label: '',
+			details: 'SELECT 1\nParameters: []'
+		});
+	});
+	it('separates blocked and rejected calls from failures', () => {
+		expect(toolOutcome('Blocked').state).toBe('blocked');
+		expect(toolOutcome('Rejected').state).toBe('blocked');
+		expect(toolOutcome('Failed').state).toBe('failed');
+		expect(toolOutcome('Timed out').state).toBe('failed');
+		expect(toolOutcome('Timed out').label).toBe('Timed out');
+	});
+});
+
+describe('approval outcome', () => {
+	it('describes approved, rejected and failed changes', () => {
+		expect(approvalOutcome('Completed · 1 rows affected')).toEqual({
+			tone: 'ok',
+			title: 'Change approved',
+			detail: '1 rows affected'
+		});
+		expect(approvalOutcome('Rejected')).toEqual({
+			tone: 'muted',
+			title: 'Change rejected',
+			detail: ''
+		});
+		expect(approvalOutcome('Blocked').tone).toBe('muted');
+		expect(approvalOutcome('Failed')).toEqual({ tone: 'bad', title: 'Change failed', detail: '' });
+		expect(approvalOutcome('Timed out · verify database before retrying')).toEqual({
+			tone: 'bad',
+			title: 'Change timed out',
+			detail: 'verify database before retrying'
+		});
+	});
+});
+
+describe('thinking preview', () => {
+	it('flattens markdown and whitespace into one line', () => {
+		expect(thinkingPreview('## Plan\n\n**Check** the `users`\n  table_name first.')).toBe(
+			'Plan Check the users table_name first.'
+		);
+		expect(thinkingPreview('  \n ')).toBe('');
+	});
+});
+
+describe('current activity label', () => {
+	it('shows the current step and returns to thinking after a tool finishes', () => {
+		expect(currentActivityLabel([])).toBe('Thinking…');
+		expect(currentActivityLabel([{ type: 'tool', name: 'list_tables', summary: null }])).toBe(
+			'Inspecting tables…'
+		);
+		expect(currentActivityLabel([{ type: 'tool', name: 'query_rows', summary: null }])).toBe(
+			'Running query…'
+		);
+		expect(currentActivityLabel([{ type: 'tool', name: 'query_rows', summary: 'Completed' }])).toBe(
+			'Thinking…'
+		);
+		expect(currentActivityLabel([{ type: 'thinking', text: 'reasoning' }])).toBe('Thinking…');
+	});
+	it('distinguishes waiting for approval from executing an approved write', () => {
+		const item = {
+			type: 'tool' as const,
+			name: 'propose_write',
+			summary: null,
+			approval: { id: 'one', sql: 'UPDATE t SET x=1' }
+		};
+		expect(currentActivityLabel([item])).toBe('Waiting for approval…');
+		expect(
+			currentActivityLabel([{ ...item, approval: { ...item.approval, decision: true } }])
+		).toBe('Executing approved statement…');
+		expect(
+			currentActivityLabel([{ ...item, approval: { ...item.approval, decision: false } }])
+		).toBe('Processing decision…');
+	});
+});
+
+describe('completed activity count', () => {
+	it('counts finished tool calls, including failures, without counting thinking or pending approvals', () => {
+		expect(
+			completedActivityCount([
+				{ type: 'thinking', text: 'thinking' },
+				{ type: 'tool', name: 'query_rows', summary: 'Completed' },
+				{ type: 'tool', name: 'query_rows', summary: 'Failed' },
+				{
+					type: 'tool',
+					name: 'propose_write',
+					summary: null,
+					approval: { id: 'one', sql: 'DELETE FROM t' }
+				}
+			])
+		).toBe(2);
 	});
 });

@@ -35,9 +35,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ai::ai_get_settings,
+            ai::ai_ollama_models,
             ai::ai_save_settings,
             ai::ai_chat,
             ai::ai_cancel,
+            ai::ai_decide_write,
             commands::list_connections,
             commands::secret_status,
             commands::save_connection,

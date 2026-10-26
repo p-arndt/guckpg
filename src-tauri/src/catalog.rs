@@ -27,6 +27,30 @@ pub struct SchemaObject {
     pub identity: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Role {
+    name: String,
+    can_login: bool,
+    superuser: bool,
+    create_db: bool,
+    create_role: bool,
+}
+
+pub async fn roles(client: &Client) -> AppResult<Vec<Role>> {
+    let rows = client.query("SELECT rolname::text, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole FROM pg_catalog.pg_roles WHERE rolname !~ '^pg_' ORDER BY rolname", &[]).await?;
+    Ok(rows
+        .iter()
+        .map(|row| Role {
+            name: row.get(0),
+            can_login: row.get(1),
+            superuser: row.get(2),
+            create_db: row.get(3),
+            create_role: row.get(4),
+        })
+        .collect())
+}
+
 pub async fn objects(client: &Client, schema: &str) -> AppResult<Vec<SchemaObject>> {
     let rows = client
         .query_typed(

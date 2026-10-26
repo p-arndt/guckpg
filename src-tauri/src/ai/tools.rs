@@ -29,6 +29,7 @@ pub fn definitions(allow_data: bool) -> Vec<Value> {
     if allow_data {
         tools.push(definition("sample_rows", "Read at most 20 rows and 64 columns from an ordinary table. Values and output may be truncated. Requires explicit data sharing permission.", &["schema", "table"]));
         tools.push(super::query::definition());
+        tools.push(json!({"type":"function","function":{"name":"query_sql","description":"Run one PostgreSQL read query using SQL, including CTEs, views, expressions and aggregates. Results are limited to 100 rows and may be truncated. Use only for reading; writes require propose_write.","parameters":{"type":"object","properties":{"sql":{"type":"string","minLength":1,"maxLength":16384}},"required":["sql"],"additionalProperties":false}}}));
     }
     tools
 }
@@ -111,6 +112,16 @@ pub async fn execute(
     args: &Value,
     allow_data: bool,
 ) -> AppResult<Value> {
+    if name == "query_sql" {
+        if !allow_data {
+            return Err(AppError::msg("AI query: data access is disabled"));
+        }
+        let sql = write_sql(args).map_err(|_| {
+            AppError::msg("AI query: expected one non-empty sql string of at most 16384 bytes")
+        })?;
+        let conn = manager.ephemeral(connection_id, database).await?;
+        return super::query::execute_sql(&conn, sql).await;
+    }
     if name == "query_rows" {
         if !allow_data {
             return Err(AppError::msg("AI query: data access is disabled"));
@@ -303,6 +314,32 @@ mod tests {
         .await
         .unwrap_err();
         assert!(denied.to_string().contains("data access is disabled"));
+        let denied_sql = execute(
+            &manager,
+            "missing",
+            "missing",
+            "query_sql",
+            &json!({"sql":"SELECT 1"}),
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(denied_sql.to_string().contains("data access is disabled"));
+        let invalid_sql = execute(
+            &manager,
+            "missing",
+            "missing",
+            "query_sql",
+            &json!({"sql":"SELECT 1", "extra":true}),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            invalid_sql
+                .to_string()
+                .contains("expected one non-empty sql")
+        );
         let invalid = execute(
             &manager,
             "missing",
@@ -424,11 +461,15 @@ mod tests {
     fn descriptors_and_validation_agree() {
         for allow_data in [false, true] {
             let tools = definitions(allow_data);
-            assert_eq!(tools.len(), if allow_data { 5 } else { 3 });
+            assert_eq!(tools.len(), if allow_data { 6 } else { 3 });
             for tool in tools {
                 assert_eq!(tool["type"], "function");
                 let function = &tool["function"];
                 assert_eq!(function["parameters"]["additionalProperties"], false);
+                if function["name"] == "query_sql" {
+                    assert!(write_sql(&json!({"sql":"SELECT 1"})).is_ok());
+                    continue;
+                }
                 if function["name"] == "query_rows" {
                     assert_eq!(
                         function["parameters"]["properties"]["limit"]["maximum"],

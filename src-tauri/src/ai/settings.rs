@@ -167,15 +167,8 @@ impl SettingsStore {
     }
 
     fn read_secret(account: &str) -> AppResult<Option<String>> {
-        let entry = keyring::Entry::new("guckpg", account)
-            .map_err(|_| AppError::msg("Could not access the AI keychain entry."))?;
-        match entry.get_password() {
-            Ok(key) => Ok(Some(key)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(_) => Err(AppError::msg(
-                "Could not read the AI API key from the keychain.",
-            )),
-        }
+        crate::vault::get(account)
+            .map_err(|_| AppError::msg("Could not read AI credentials from the keychain."))
     }
 
     pub fn load(&self) -> AppResult<AiSettings> {
@@ -235,34 +228,19 @@ impl SettingsStore {
             if key.len() > 16_384 || key.contains(['\r', '\n']) {
                 return Err(AppError::msg("Invalid AI API key."));
             }
-            let entry = keyring::Entry::new("guckpg", &config.account()?)
-                .map_err(|_| AppError::msg("Could not access the AI keychain entry."))?;
+            let account = config.account()?;
             if key.is_empty() {
-                match entry.delete_credential() {
-                    Ok(()) | Err(keyring::Error::NoEntry) => {}
-                    Err(_) => return Err(AppError::msg("Could not delete the AI API key.")),
-                }
+                crate::vault::delete(&account)?;
             } else {
-                entry
-                    .set_password(&key)
-                    .map_err(|_| AppError::msg("Could not save the AI API key to the keychain."))?;
+                crate::vault::set(&account, &key)?;
             }
         }
         if let Some(basic) = basic_auth {
-            let entry = keyring::Entry::new("guckpg", &Self::basic_account(&config)?)
-                .map_err(|_| AppError::msg("Could not access the Basic Auth keychain entry."))?;
+            let account = Self::basic_account(&config)?;
             if basic.username.is_empty() && basic.password.is_empty() {
-                match entry.delete_credential() {
-                    Ok(()) | Err(keyring::Error::NoEntry) => {}
-                    Err(_) => {
-                        return Err(AppError::msg("Could not delete Basic Auth credentials."));
-                    }
-                }
+                crate::vault::delete(&account)?;
             } else {
-                let value = serde_json::to_string(&basic)?;
-                entry
-                    .set_password(&value)
-                    .map_err(|_| AppError::msg("Could not save Basic Auth credentials."))?;
+                crate::vault::set(&account, &serde_json::to_string(&basic)?)?;
             }
         }
         let dir = self

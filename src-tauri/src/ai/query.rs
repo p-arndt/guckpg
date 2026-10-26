@@ -81,6 +81,8 @@ enum AggregateKind {
 struct Aggregate {
     function: AggregateKind,
     column: Option<ColumnRef>,
+    #[serde(default)]
+    distinct: bool,
 }
 
 #[derive(Deserialize)]
@@ -147,7 +149,7 @@ pub(super) fn definition() -> Value {
             "value":{"type":["string","null"],"maxLength":1024}
         }))}},
         "aggregates":{"type":"array","maxItems":32,"items":object(json!({
-            "function":{"type":"string","enum":["count","sum","avg","min","max"]},"column":nullable_column
+            "function":{"type":"string","enum":["count","sum","avg","min","max"]},"column":nullable_column,"distinct":{"type":"boolean"}
         }))},
         "groupBy":{"type":"array","maxItems":32,"items":column},
         "orderBy":{"type":"array","maxItems":32,"items":object(json!({
@@ -158,7 +160,7 @@ pub(super) fn definition() -> Value {
     }));
     json!({"type":"function","function":{
         "name":"query_rows",
-        "description":"Run a bounded read-only SELECT built from this plan. Inspect columns first. Table references: 0 = base table, 1..3 = joins in order. Join left must refer to an earlier table. filters combine with AND; filterGroups are OR alternatives, each containing AND filters, and combine with filters using AND. The total number of filters across both is at most 16. Values are strings cast to the column type (or null for is_null/is_not_null). Columns are output first, then aggregates; orderBy.field is their zero-based output position. For grouped queries list every selected column in groupBy. count with column:null counts rows. Select at least one column or aggregate; for total row count use count with column:null. Use empty arrays for unused features. Supports ordinary tables and built-in scalar columns; views, RLS, custom access methods and expression/partial indexes are blocked. Returns at most 100 rows; use aggregates for totals. No raw SQL, writes, arbitrary expressions or functions.",
+        "description":"Run a bounded read-only SELECT built from this plan. Inspect columns first. Table references: 0 = base table, 1..3 = joins in order. Join left must refer to an earlier table. filters combine with AND; filterGroups are OR alternatives, each containing AND filters, and combine with filters using AND. The total number of filters across both is at most 16. Values are strings cast to the column type (or null for is_null/is_not_null). Columns are output first, then aggregates; orderBy.field is their zero-based output position. For grouped queries list every selected column in groupBy. count with column:null counts rows; set distinct:true with a column to aggregate distinct values. Select at least one column or aggregate; for total row count use count with column:null. Use empty arrays for unused features. Supports ordinary tables and built-in scalar columns; views, RLS, custom access methods and expression/partial indexes are blocked. Returns at most 100 rows; use aggregates for totals. No raw SQL, writes, arbitrary expressions or functions.",
         "parameters":parameters
     }})
 }
@@ -178,7 +180,7 @@ impl Query {
             return Err(rejected("query plan exceeds 32 KiB"));
         }
         let query: Self = serde_json::from_value(value.clone())
-            .map_err(|_| rejected("invalid query plan or unknown fields"))?;
+            .map_err(|error| rejected(&format!("invalid query plan: {error}")))?;
         query.validate()?;
         Ok(query)
     }
@@ -261,6 +263,9 @@ impl Query {
             }
         }
         for aggregate in &self.aggregates {
+            if aggregate.distinct && aggregate.column.is_none() {
+                return Err(rejected("distinct requires an aggregate column"));
+            }
             if let Some(column) = &aggregate.column {
                 check(column)?;
             } else if !matches!(aggregate.function, AggregateKind::Count) {
@@ -396,7 +401,8 @@ fn compile(query: &Query, tables: &[Columns]) -> AppResult<Compiled> {
             Some(c) => resolve(c)?.0,
             None => "*".into(),
         };
-        expressions.push(format!("pg_catalog.{function}({argument})"));
+        let distinct = if aggregate.distinct { "DISTINCT " } else { "" };
+        expressions.push(format!("pg_catalog.{function}({distinct}{argument})"));
         columns.push(match &aggregate.column {
             Some(c) => format!("{function}_t{}_{}", c.table, c.column),
             None => "count".into(),
@@ -555,6 +561,35 @@ pub(super) async fn execute(conn: &PgConn, query: &Query) -> AppResult<Value> {
     Ok(value)
 }
 
+fn wrap_sql(sql: &str) -> String {
+    let sql = sql.trim().trim_end_matches(';').trim_end();
+    format!(
+        "SELECT pg_catalog.left(pg_catalog.row_to_json(q)::pg_catalog.text, 16385) FROM (\n{sql}\n) AS q LIMIT 101"
+    )
+}
+
+pub(super) async fn execute_sql(conn: &PgConn, sql: &str) -> AppResult<Value> {
+    conn.client.batch_execute("BEGIN READ ONLY; SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '2s'; SET LOCAL idle_in_transaction_session_timeout = '10s'; SET LOCAL work_mem = '4MB'; SET LOCAL max_parallel_workers_per_gather = 0").await?;
+    let result = async {
+        let statement = conn.client.prepare(&wrap_sql(sql)).await?;
+        let rows = conn.client.query(&statement, &[]).await?;
+        let has_more = rows.len() > MAX_ROWS;
+        let mut truncated = false;
+        let rows: Vec<Value> = rows.iter().take(MAX_ROWS).map(|row| {
+            let value: String = row.get(0);
+            match serde_json::from_str(&value) {
+                Ok(value) => value,
+                Err(_) => { truncated = true; Value::String(value) }
+            }
+        }).collect();
+        Ok::<_, AppError>(super::tools::bounded_output(json!({"sql":sql,"parameters":[],"rows":rows,"hasMore":has_more,"rowTruncated":truncated})))
+    }.await;
+    let rollback = conn.client.batch_execute("ROLLBACK").await;
+    let value = result?;
+    rollback?;
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,6 +655,32 @@ mod tests {
             result["data"]["rows"],
             json!([["Ada", "35", "2"], ["Bea", "7", "1"]])
         );
+        let sql = format!(
+            "WITH totals AS (SELECT customer_id, count(DISTINCT note) AS n FROM {schema}.orders GROUP BY customer_id) SELECT * FROM totals ORDER BY customer_id"
+        );
+        let result = execute_sql(&conn, &sql).await.unwrap();
+        assert_eq!(
+            result["data"]["rows"],
+            json!([{"customer_id":1,"n":1},{"customer_id":2,"n":0}])
+        );
+        assert!(
+            execute_sql(&conn, &format!("DELETE FROM {schema}.orders RETURNING id"))
+                .await
+                .is_err()
+        );
+        assert!(
+            execute_sql(&conn, &format!("SELECT 1; DELETE FROM {schema}.orders"))
+                .await
+                .is_err()
+        );
+        let distinct = json!({"schema":schema,"table":"orders",
+            "columns":[{"table":0,"column":"customer_id"}],
+            "aggregates":[{"function":"count","column":{"table":0,"column":"note"},"distinct":true}],
+            "groupBy":[{"table":0,"column":"customer_id"}],"orderBy":[{"field":0,"direction":"asc"}],"limit":10});
+        let result = execute(&conn, &Query::parse(&distinct).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(result["data"]["rows"], json!([["1", "1"], ["2", "0"]]));
         let mut filtered = json!({"schema":schema,"table":"orders","columns":[{"table":0,"column":"id"}],
             "filters":[{"column":{"table":0,"column":"note"},"op":"eq","value":"paid'; DELETE FROM orders; --"}],"limit":1});
         let result = execute(&conn, &Query::parse(&filtered).unwrap())
@@ -698,6 +759,42 @@ mod tests {
         assert!(!compiled.sql.contains(injection));
         assert_eq!(compiled.parameters, [injection]);
         assert!(compiled.sql.contains("LIMIT 11 OFFSET 0"));
+    }
+
+    #[test]
+    fn supports_distinct_aggregates_and_explains_invalid_plans() {
+        let mut value = plan();
+        value["aggregates"][0]["distinct"] = json!(true);
+        let compiled = compile(&Query::parse(&value).unwrap(), &metadata()).unwrap();
+        assert!(
+            compiled
+                .sql
+                .contains("pg_catalog.sum(DISTINCT t0.\"amount\")")
+        );
+        value["aggregates"][0] = json!({"function":"count","column":null,"distinct":true});
+        assert!(
+            Query::parse(&value)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("distinct requires")
+        );
+        value["aggregates"][0] = json!({"function":"count","column":null,"unexpected":true});
+        assert!(
+            Query::parse(&value)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("unknown field `unexpected`")
+        );
+    }
+
+    #[test]
+    fn wraps_sql_and_limits_results() {
+        assert_eq!(
+            wrap_sql(" SELECT 1; "),
+            "SELECT pg_catalog.left(pg_catalog.row_to_json(q)::pg_catalog.text, 16385) FROM (\nSELECT 1\n) AS q LIMIT 101"
+        );
     }
 
     #[test]

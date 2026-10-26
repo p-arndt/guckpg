@@ -12,6 +12,7 @@ mod session;
 mod sql;
 mod ssh;
 mod structure;
+mod vault;
 
 use tauri::Manager as _;
 
@@ -27,6 +28,7 @@ pub fn run() {
                 )?;
             }
             let dir = app.path().app_config_dir()?;
+            vault::init(&dir)?;
             app.manage(ai::AiState::new(&dir));
             app.manage(session::Manager::new(
                 config::ConnectionStore::new(&dir),
@@ -52,6 +54,8 @@ pub fn run() {
             commands::connect,
             commands::disconnect,
             commands::list_databases,
+            commands::list_roles,
+            commands::create_role,
             commands::list_schemas,
             commands::list_relations,
             commands::list_objects,

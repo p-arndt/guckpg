@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tauri::State;
 
-use crate::catalog::{self, Column, CompletionTable, Diagram, Relation, SchemaObject};
+use crate::catalog::{self, Column, CompletionTable, Diagram, Relation, Role, SchemaObject};
 use crate::config::{self, ConnectionConfig, Placement, Secrets};
 use crate::editing;
 use crate::error::{AppError, AppResult};
@@ -132,6 +132,66 @@ pub async fn disconnect(manager: State<'_, Manager>, id: String) -> AppResult<()
 pub async fn list_databases(manager: State<'_, Manager>, id: String) -> AppResult<Vec<String>> {
     let conn = manager.meta(&id, "").await?;
     catalog::databases(&conn.client).await
+}
+
+#[tauri::command]
+pub async fn list_roles(manager: State<'_, Manager>, id: String) -> AppResult<Vec<Role>> {
+    let conn = manager.meta(&id, "").await?;
+    catalog::roles(&conn.client).await
+}
+
+fn create_role_sql(
+    name: &str,
+    password: Option<&str>,
+    login: bool,
+    create_db: bool,
+    create_role: bool,
+) -> AppResult<String> {
+    if name.is_empty()
+        || name.len() > 63
+        || name.contains('\0')
+        || password.is_some_and(|p| p.is_empty() || p.contains('\0'))
+    {
+        return Err(AppError::msg("Invalid role name or password."));
+    }
+    let mut sql = format!(
+        "CREATE ROLE {} {} {} {}",
+        crate::sql::quote_ident(name),
+        if login { "LOGIN" } else { "NOLOGIN" },
+        if create_db { "CREATEDB" } else { "NOCREATEDB" },
+        if create_role {
+            "CREATEROLE"
+        } else {
+            "NOCREATEROLE"
+        }
+    );
+    if let Some(password) = password {
+        sql.push_str(&format!(
+            " PASSWORD {}",
+            crate::sql::quote_literal(password)
+        ));
+    }
+    Ok(sql)
+}
+
+#[tauri::command]
+pub async fn create_role(
+    manager: State<'_, Manager>,
+    id: String,
+    name: String,
+    password: Option<String>,
+    login: bool,
+    create_db: bool,
+    create_role: bool,
+) -> AppResult<()> {
+    if manager.store.get(&id)?.read_only {
+        return Err(AppError::msg("This connection is configured as read-only."));
+    }
+    let sql = create_role_sql(&name, password.as_deref(), login, create_db, create_role)?;
+    let database = manager.store.get(&id)?.database;
+    let conn = manager.ephemeral(&id, &database).await?;
+    conn.client.batch_execute(&sql).await.map_err(|_| AppError::msg("Could not create the role. Check your permissions and whether the name already exists."))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -315,4 +375,20 @@ pub async fn cancel_query(manager: State<'_, Manager>, tab_id: String) -> AppRes
 pub async fn close_tab(manager: State<'_, Manager>, tab_id: String) -> AppResult<()> {
     manager.close_tab(&tab_id).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::create_role_sql;
+
+    #[test]
+    fn creates_roles_with_quoted_values_and_explicit_privileges() {
+        assert_eq!(
+            create_role_sql("a\"b", Some("a'b\\c"), true, false, true).unwrap(),
+            "CREATE ROLE \"a\"\"b\" LOGIN NOCREATEDB CREATEROLE PASSWORD E'a''b\\\\c'"
+        );
+        assert!(create_role_sql("", None, true, false, false).is_err());
+        assert!(create_role_sql(&"a".repeat(64), None, true, false, false).is_err());
+        assert!(create_role_sql("role", Some("bad\0password"), true, false, false).is_err());
+    }
 }

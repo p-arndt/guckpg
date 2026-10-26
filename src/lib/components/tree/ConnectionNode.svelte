@@ -10,6 +10,7 @@
 	import { tabs } from '#lib/state/tabs.svelte.js';
 	import TreeRow from './TreeRow.svelte';
 	import DatabaseNode from './DatabaseNode.svelte';
+	import RolesNode from './RolesNode.svelte';
 
 	interface Props {
 		connection: ConnectionConfig;
@@ -221,6 +222,7 @@
 </ContextMenu.Root>
 
 {#if expanded}
+	<RolesNode connectionId={connection.id} readOnly={connection.readOnly} depth={depth + 1} />
 	{#each ordered as database (database)}
 		<DatabaseNode
 			connectionId={connection.id}

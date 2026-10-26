@@ -2,9 +2,7 @@
 //! app config dir; passwords and key passphrases go to the OS keychain so the
 //! file can be copied around or backed up without leaking anything.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -85,8 +83,7 @@ pub struct Secrets {
     pub ssh_passphrase: Option<String>,
 }
 
-/// All secrets of one connection. Stored as a single JSON keychain item so
-/// macOS asks for access once per connection, not once per secret.
+/// All secrets of one connection.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedSecrets {
@@ -116,39 +113,21 @@ impl ResolvedSecrets {
     }
 }
 
-const KEYRING_SERVICE: &str = "guckpg";
-
-/// Every keychain read can show a macOS prompt, so each connection's secrets
-/// are read at most once per app run.
-static CACHE: LazyLock<Mutex<HashMap<String, ResolvedSecrets>>> = LazyLock::new(Default::default);
-
-/// Accounts of the one-item-per-secret layout of earlier versions.
 const LEGACY_SUFFIXES: [&str; 3] = ["password", "ssh-password", "ssh-passphrase"];
 
-fn entry(account: &str) -> AppResult<keyring::Entry> {
-    Ok(keyring::Entry::new(KEYRING_SERVICE, account)?)
-}
-
 fn read_item(account: &str) -> AppResult<Option<String>> {
-    match entry(account)?.get_password() {
-        Ok(v) => Ok(Some(v)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+    crate::vault::get(account)
 }
 
 fn delete_item(account: &str) -> AppResult<()> {
-    match entry(account)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    crate::vault::delete(account)
 }
 
 fn write_bundle(id: &str, secrets: &ResolvedSecrets) -> AppResult<()> {
     if secrets.is_empty() {
         delete_item(id)
     } else {
-        Ok(entry(id)?.set_password(&serde_json::to_string(secrets)?)?)
+        crate::vault::set(id, &serde_json::to_string(secrets)?)
     }
 }
 
@@ -174,25 +153,16 @@ pub fn load_secrets(id: &str) -> AppResult<ResolvedSecrets> {
     if id.is_empty() {
         return Ok(ResolvedSecrets::default());
     }
-    if let Some(cached) = CACHE.lock().unwrap().get(id) {
-        return Ok(cached.clone());
+    match read_item(id)? {
+        Some(json) => Ok(serde_json::from_str(&json)?),
+        None => migrate_legacy(id),
     }
-    let secrets = match read_item(id)? {
-        Some(json) => serde_json::from_str(&json)?,
-        None => migrate_legacy(id)?,
-    };
-    CACHE
-        .lock()
-        .unwrap()
-        .insert(id.to_string(), secrets.clone());
-    Ok(secrets)
 }
 
 pub fn store_secrets(id: &str, submitted: &Secrets) -> AppResult<()> {
     let mut secrets = load_secrets(id)?;
     secrets.merge(submitted);
     write_bundle(id, &secrets)?;
-    CACHE.lock().unwrap().insert(id.to_string(), secrets);
     Ok(())
 }
 
@@ -200,12 +170,10 @@ pub fn store_secrets(id: &str, submitted: &Secrets) -> AppResult<()> {
 pub fn copy_secrets(from: &str, to: &str) -> AppResult<()> {
     let secrets = load_secrets(from)?;
     write_bundle(to, &secrets)?;
-    CACHE.lock().unwrap().insert(to.to_string(), secrets);
     Ok(())
 }
 
 pub fn delete_secrets(id: &str) -> AppResult<()> {
-    CACHE.lock().unwrap().remove(id);
     delete_item(id)?;
     for suffix in LEGACY_SUFFIXES {
         delete_item(&format!("{id}:{suffix}"))?;

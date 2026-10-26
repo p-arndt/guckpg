@@ -67,6 +67,7 @@ export function currentActivityLabel(items: AiActivity[]): string {
 		case 'sample_rows':
 			return 'Reading sample rows…';
 		case 'query_rows':
+		case 'query_sql':
 			return 'Running query…';
 		case 'propose_write':
 			return 'Preparing change…';
@@ -146,8 +147,8 @@ export interface AiRequest extends AiContext {
 	messages: AiMessage[];
 	allowData: boolean;
 	allowWrite: boolean;
-}
 	confirmReads: boolean;
+}
 
 export function defaultAiConfig(provider: AiProvider = 'ollama'): AiConfig {
 	return {

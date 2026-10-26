@@ -21,6 +21,7 @@
 	import { highlightSql } from '#lib/highlight.js';
 	import { ai, type AiAccess } from '#lib/state/ai.svelte.js';
 	import { connections } from '#lib/state/connections.svelte.js';
+	import { chatContext } from '#lib/chat-context.js';
 	import { tabs } from '#lib/state/tabs.svelte.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -141,40 +142,31 @@
 		config.provider === ai.settings.config.provider &&
 			config.baseUrl.trim() === ai.settings.config.baseUrl
 	);
-	let selectedDatabase = $state<{
-		connectionId: string;
-		baseDatabase: string;
-		database: string;
-	} | null>(null);
+	let selectedDatabase = $state<{ connectionId: string; database: string } | null>(null);
 	let databases = $state<string[]>([]);
 	let previousBase: string | null = null;
 	const baseContext = $derived.by(() => {
 		const tab = tabs.active;
-		const connection = tab
-			? connections.get(tab.connectionId)
-			: connections.list.find((c) => connections.status[c.id] === 'connected');
+		const connection =
+			(tab && connections.status[tab.connectionId] === 'connected'
+				? connections.get(tab.connectionId)
+				: undefined) ?? connections.list.find((c) => connections.status[c.id] === 'connected');
 		if (!connection || connections.status[connection.id] !== 'connected') return null;
 		return {
 			connectionId: connection.id,
-			database: tab?.database ?? connections.info[connection.id]?.database ?? connection.database,
+			database:
+				(tab?.connectionId === connection.id ? tab.database : undefined) ??
+				connections.info[connection.id]?.database ??
+				connection.database,
 			name: connection.name,
 			user: connection.user,
 			readOnly: connection.readOnly
 		};
 	});
 
-	const context = $derived.by(() => {
-		if (!baseContext) return null;
-		const selected = selectedDatabase;
-		return {
-			...baseContext,
-			database:
-				selected?.connectionId === baseContext.connectionId &&
-				selected.baseDatabase === baseContext.database
-					? selected.database
-					: baseContext.database
-		};
-	});
+	const context = $derived(
+		chatContext(baseContext, selectedDatabase, connections.list, connections.status)
+	);
 	$effect(() => {
 		const base = baseContext;
 		const key = base ? JSON.stringify([base.connectionId, base.database]) : null;
@@ -182,12 +174,18 @@
 			selectedDatabase = null;
 			previousBase = key;
 		}
+	});
+	$effect(() => {
+		const currentContext = context;
 		let current = true;
-		databases = base ? [base.database] : [];
-		if (base) {
-			api.listDatabases(base.connectionId).then(
+		databases = currentContext ? [currentContext.database] : [];
+		if (currentContext) {
+			api.listDatabases(currentContext.connectionId).then(
 				(list) => {
-					if (current) databases = list.includes(base.database) ? list : [base.database, ...list];
+					if (current)
+						databases = list.includes(currentContext.database)
+							? list
+							: [currentContext.database, ...list];
 				},
 				() => {}
 			);
@@ -292,16 +290,16 @@
 		{
 			value: 'read',
 			label: 'Read data',
-			hint: 'Can run read-only queries.',
+			hint: 'Runs SQL automatically in a read-only transaction. Database functions may have external side effects.',
 			icon: EyeIcon,
+			tone: 'text-cool'
+		},
 		{
 			value: 'confirm',
 			label: 'Approve every action',
 			hint: 'Review each database access and change before it runs.',
 			icon: ShieldCheckIcon,
 			tone: 'text-signal-text'
-		},
-			tone: 'text-cool'
 		},
 		{
 			value: 'write',
@@ -892,24 +890,44 @@
 			{#if context}
 				<Select.Root
 					type="single"
-					value={context.database}
-					onValueChange={(database) => {
-						if (database && baseContext)
+					value={context.connectionId}
+					onValueChange={(id) => {
+						const connection = connections.get(id);
+						if (connection && id !== context.connectionId)
 							selectedDatabase = {
-								connectionId: baseContext.connectionId,
-								baseDatabase: baseContext.database,
-								database
+								connectionId: id,
+								database: connections.info[id]?.database ?? connection.database
 							};
 					}}
 				>
 					<Select.Trigger
 						size="sm"
 						class="h-6 min-w-0 gap-1.5 px-2 text-xs text-muted-foreground"
-						aria-label="Chat database"
+						aria-label="Chat connection"
 						title="Signed in as {context.user}"
 					>
 						<DatabaseIcon class="size-3 shrink-0" />
-						<span class="truncate">{context.name} / {context.database}</span>
+						<span class="truncate">{context.name}</span>
+					</Select.Trigger>
+					<Select.Content>
+						{#each connections.list.filter((c) => connections.status[c.id] === 'connected') as connection (connection.id)}
+							<Select.Item value={connection.id} label={connection.name} />
+						{/each}
+					</Select.Content>
+				</Select.Root>
+				<Select.Root
+					type="single"
+					value={context.database}
+					onValueChange={(database) => {
+						if (database) selectedDatabase = { connectionId: context.connectionId, database };
+					}}
+				>
+					<Select.Trigger
+						size="sm"
+						class="h-6 min-w-0 gap-1.5 px-2 text-xs text-muted-foreground"
+						aria-label="Chat database"
+					>
+						<span class="truncate">{context.database}</span>
 					</Select.Trigger>
 					<Select.Content>
 						{#each databases as database (database)}

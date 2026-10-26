@@ -121,6 +121,14 @@ and `cargo test`. A dedicated AI database test is ignored by default: point
 `guckpg_ai_test` database and run
 `cargo test ai:: -- --ignored`.
 
+## Desktop development
+
+Run `pnpm tauri:dev` to start the desktop app. On macOS, if a code-signing
+identity named `guckpg Local Development Code Signing` exists, this command signs
+the debug executable before launch. Existing keychain items may still require
+access approval.
+Without that identity, the development build runs without this signing step.
+
 ## Svelte development
 
 Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).

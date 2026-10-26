@@ -294,6 +294,13 @@
 			label: 'Read data',
 			hint: 'Can run read-only queries.',
 			icon: EyeIcon,
+		{
+			value: 'confirm',
+			label: 'Approve every action',
+			hint: 'Review each database access and change before it runs.',
+			icon: ShieldCheckIcon,
+			tone: 'text-signal-text'
+		},
 			tone: 'text-cool'
 		},
 		{
@@ -495,13 +502,17 @@
 				{#if item.summary === null}
 					<section
 						class="overflow-hidden rounded-xl border border-cool/40 bg-background text-xs shadow-panel"
-						aria-label="Write approval"
+						aria-label="Database approval"
 						out:slide={{ duration }}
 					>
 						<div class="flex items-start gap-2.5 border-b border-rule-2 px-3 py-3">
 							<ShieldCheckIcon class="mt-0.5 size-4 shrink-0 text-cool" />
 							<div class="min-w-0">
-								<p class="font-medium text-foreground">Review database change</p>
+								<p class="font-medium text-foreground">
+									{item.name === 'propose_write'
+										? 'Review database change'
+										: 'Review database access'}
+								</p>
 								<p class="mt-0.5 break-words text-muted-foreground">
 									{context?.name} / {context?.database}
 								</p>
@@ -510,8 +521,9 @@
 						<div class="flex flex-col gap-3 p-3">
 							{@render sqlPreview(item.approval.sql)}
 							<p class="leading-relaxed text-muted-foreground">
-								Review the entire statement before approving. It may delete data or trigger
-								additional changes.
+								{item.name === 'propose_write'
+									? 'Review the entire statement before approving. It may delete data or trigger additional changes.'
+									: 'Review the requested operation and its arguments before approving.'}
 							</p>
 							{#if item.approval.decision === undefined}
 								<div class="flex flex-wrap justify-end gap-2">
@@ -1040,7 +1052,7 @@
 							>
 							<DropdownMenu.RadioGroup
 								value={ai.access}
-								onValueChange={(value) => ai.setAccess(value as AiAccess)}
+								onValueChange={(value) => ai.setAccess(value as AiAccess, !!context?.readOnly)}
 							>
 								{#each accessLevels as level (level.value)}
 									{@const locked = level.value === 'write' && !!context?.readOnly}

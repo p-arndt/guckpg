@@ -147,6 +147,7 @@ export interface AiRequest extends AiContext {
 	allowData: boolean;
 	allowWrite: boolean;
 }
+	confirmReads: boolean;
 
 export function defaultAiConfig(provider: AiProvider = 'ollama'): AiConfig {
 	return {

@@ -74,6 +74,23 @@ describe('chat isolation', () => {
 		expect(state.allowData).toBe(false);
 		expect(state.allowWrite).toBe(false);
 	});
+	it('enables confirmation for every database access', async () => {
+		const state = chat();
+		vi.spyOn(aiApi, 'chat').mockResolvedValue({ text: 'Done', tools: [] });
+		state.setAccess('confirm');
+		await state.send('Inspect the database');
+		expect(vi.mocked(aiApi.chat).mock.calls[0][0]).toMatchObject({
+			allowData: true,
+			allowWrite: true,
+			confirmReads: true
+		});
+		state.setAccess('read');
+		expect(state.confirmReads).toBe(false);
+		state.setAccess('confirm', true);
+		expect(state.allowWrite).toBe(false);
+		expect(state.access).toBe('confirm');
+	});
+
 	it('clears the chat only when the access level changes', () => {
 		const state = chat();
 		state.setAccess('read');

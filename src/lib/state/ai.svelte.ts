@@ -9,7 +9,7 @@ import {
 import { errorMessage } from '#lib/api.js';
 
 /** Each level includes the ones before it. */
-export type AiAccess = 'schema' | 'read' | 'write';
+export type AiAccess = 'schema' | 'read' | 'write' | 'confirm';
 
 export class AiChat {
 	settings = $state({ config: defaultAiConfig(), hasApiKey: false, hasBasicAuth: false });
@@ -20,6 +20,7 @@ export class AiChat {
 	>([]);
 	allowData = $state(false);
 	allowWrite = $state(false);
+	confirmReads = $state(false);
 	busy = $state(false);
 	error = $state('');
 	activity = $state<AiActivity[]>([]);
@@ -47,14 +48,21 @@ export class AiChat {
 	}
 
 	get access(): AiAccess {
-		return this.allowWrite ? 'write' : this.allowData ? 'read' : 'schema';
+		return this.confirmReads
+			? 'confirm'
+			: this.allowWrite
+				? 'write'
+				: this.allowData
+					? 'read'
+					: 'schema';
 	}
 
-	setAccess(access: AiAccess) {
+	setAccess(access: AiAccess, readOnly = false) {
 		if (access === this.access) return;
 		this.reset();
 		this.allowData = access !== 'schema';
-		this.allowWrite = access === 'write';
+		this.allowWrite = access === 'write' || (access === 'confirm' && !readOnly);
+		this.confirmReads = access === 'confirm';
 	}
 
 	async decideWrite(approvalId: string, approved: boolean) {
@@ -87,6 +95,7 @@ export class AiChat {
 		this.messages = [];
 		this.allowData = false;
 		this.allowWrite = false;
+		this.confirmReads = false;
 		this.error = '';
 	}
 
@@ -125,7 +134,8 @@ export class AiChat {
 					requestId,
 					messages: this.messages.map(({ role, content }) => ({ role, content })),
 					allowData: this.allowData,
-					allowWrite: this.allowWrite
+					allowWrite: this.allowWrite,
+					confirmReads: this.confirmReads
 				},
 				(event) => {
 					if (this.requestId !== requestId) return;

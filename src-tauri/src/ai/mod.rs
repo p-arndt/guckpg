@@ -128,6 +128,8 @@ pub struct ChatRequest {
     allow_data: bool,
     #[serde(default)]
     allow_write: bool,
+    #[serde(default)]
+    confirm_reads: bool,
 }
 
 impl ChatRequest {
@@ -343,6 +345,43 @@ async fn run_chat(
                 });
                 conversation.tool_result(&call, value)?;
                 continue;
+            }
+            if request.confirm_reads {
+                let preview = format!(
+                    "{}\n{}",
+                    call.name,
+                    serde_json::to_string_pretty(&call.arguments)?
+                );
+                if preview.len() > 32_768 {
+                    let value = json!({"error": "Tool request is too large to review."});
+                    let _ = on_event.send(ChatEvent::ToolFinished {
+                        summary: "Blocked".into(),
+                        detail: None,
+                    });
+                    trace.push(ToolTrace {
+                        name: call.name.clone(),
+                        summary: "Blocked".into(),
+                    });
+                    conversation.tool_result(&call, value)?;
+                    continue;
+                }
+                let (id, approval) = state.request_approval(&request.request_id)?;
+                on_event
+                    .send(ChatEvent::Approval { id, sql: preview })
+                    .map_err(|_| AppError::msg("Could not display the database approval."))?;
+                if !approval.await.unwrap_or(false) {
+                    let _ = on_event.send(ChatEvent::ToolFinished {
+                        summary: "Rejected".into(),
+                        detail: None,
+                    });
+                    trace.push(ToolTrace {
+                        name: call.name.clone(),
+                        summary: "Rejected".into(),
+                    });
+                    conversation
+                        .tool_result(&call, json!({"error": "The user rejected the request."}))?;
+                    continue;
+                }
             }
             let result = tokio::time::timeout(
                 Duration::from_secs(25),
@@ -568,6 +607,7 @@ mod tests {
     fn chat_events_use_frontend_protocol() {
         assert_eq!(
             serde_json::to_value(ChatEvent::ToolStarted {
+            confirm_reads: false,
                 name: "query_rows".into()
             })
             .unwrap(),

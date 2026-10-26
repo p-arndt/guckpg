@@ -26,6 +26,24 @@ describe('columnWidths', () => {
 		expect(short).toBeGreaterThan(MIN_COL_PX);
 		expect(multi).toBe(MIN_COL_PX);
 	});
+
+	it('leaves room for the type label and key icon in the header', () => {
+		const rows = [['1', '2000']];
+		const [bare, typed] = columnWidths(['product_count', 'product_count'], rows, [
+			{},
+			{ type: 'bigint' }
+		]);
+		expect(typed).toBeGreaterThan(bare);
+
+		const [plain, keyed] = columnWidths(
+			['id', 'id'],
+			[['1', '1']],
+			[{ type: 'integer' }, { type: 'integer', primaryKey: true }]
+		);
+		expect(keyed).toBeGreaterThan(plain);
+		// "id integer" must not be squeezed to the minimum width.
+		expect(plain).toBeGreaterThan(MIN_COL_PX);
+	});
 });
 
 describe('isNumeric', () => {

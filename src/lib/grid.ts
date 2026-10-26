@@ -5,17 +5,38 @@ const PADDING_PX = 24;
 export const MIN_COL_PX = 60;
 export const MAX_COL_PX = 360;
 
-/** Width per column from the header and the first rows, clamped. */
-export function columnWidths(columns: string[], rows: Cell[][], sample = 200): number[] {
+const HEADER_GAP_PX = 6;
+const KEY_ICON_PX = 12 + HEADER_GAP_PX;
+
+export interface HeaderInfo {
+	type?: string;
+	primaryKey?: boolean;
+}
+
+/**
+ * Width per column from the header (name, type label, key icon) and the
+ * first rows, clamped.
+ */
+export function columnWidths(
+	columns: string[],
+	rows: Cell[][],
+	headers: HeaderInfo[] = [],
+	sample = 200
+): number[] {
 	return columns.map((name, c) => {
-		let chars = name.length + 2;
+		const header = headers[c] ?? {};
+		let headerPx = name.length * CHAR_PX;
+		if (header.type) headerPx += HEADER_GAP_PX + header.type.length * CHAR_PX;
+		if (header.primaryKey) headerPx += KEY_ICON_PX;
+		let chars = 0;
 		for (let r = 0; r < Math.min(rows.length, sample); r++) {
 			const v = rows[r][c];
 			// Only the first line counts: cells render on one line.
 			const len = v === null ? 4 : v.indexOf('\n') === -1 ? v.length : v.indexOf('\n');
 			if (len > chars) chars = len;
 		}
-		return Math.round(Math.min(MAX_COL_PX, Math.max(MIN_COL_PX, chars * CHAR_PX + PADDING_PX)));
+		const contentPx = Math.max(headerPx, chars * CHAR_PX);
+		return Math.round(Math.min(MAX_COL_PX, Math.max(MIN_COL_PX, contentPx + PADDING_PX)));
 	});
 }
 

@@ -99,7 +99,14 @@
 			const sameShape = key === shownColumns;
 			shownColumns = key;
 			if (!sameShape || widths.length !== columns.length) {
-				widths = columnWidths(columns, loaded);
+				widths = columnWidths(
+					columns,
+					loaded,
+					columns.map((name) => ({
+						type: columnTypes[name],
+						primaryKey: primaryKeys.includes(name)
+					}))
+				);
 			}
 			editing = null;
 			rowViewing = null;
@@ -555,7 +562,7 @@
 
 						{#each visible as { item, index } (index)}
 							<div
-								class="border-rule/70 absolute left-0 flex border-b {rowClass(item)}"
+								class="border-rule/60 absolute left-0 flex border-b {rowClass(item)}"
 								style:top="{HEADER_PX + index * ROW_PX}px"
 								style:height="{ROW_PX}px"
 								style:width="{totalWidth}px"
@@ -579,7 +586,7 @@
 										tabindex="-1"
 										data-row={index}
 										data-col={c}
-										class="border-rule/70 relative flex shrink-0 items-center overflow-hidden border-r px-2 whitespace-pre {isSelected
+										class="border-rule/35 relative flex shrink-0 items-center overflow-hidden border-r px-2 whitespace-pre {isSelected
 											? 'bg-signal-soft ring-1 ring-signal ring-inset'
 											: changed
 												? 'bg-signal-soft shadow-[inset_2px_0_0_var(--color-accent)]'

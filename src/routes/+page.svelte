@@ -4,7 +4,6 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import HistoryIcon from '@lucide/svelte/icons/history';
 	import { toast } from 'svelte-sonner';
-	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { errorMessage, type ConnectionConfig } from '#lib/api.js';
@@ -18,11 +17,21 @@
 	import HostKeyDialog from '#lib/components/HostKeyDialog.svelte';
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import TabBar from '#lib/components/TabBar.svelte';
+	import AiPanel from '#lib/components/AiPanel.svelte';
 	import TopBar from '#lib/components/TopBar.svelte';
 	import QueryTabView from '#lib/components/QueryTabView.svelte';
 	import TableTabView from '#lib/components/TableTabView.svelte';
 	import ErDiagramView from '#lib/components/er/ErDiagramView.svelte';
 
+	let aiOpen = $state(false);
+	let aiPane = $state<ReturnType<typeof Resizable.Pane> | null>(null);
+	let aiSize = 26;
+
+	$effect(() => {
+		if (!aiPane) return;
+		if (aiOpen && aiPane.isCollapsed()) aiPane.resize(aiSize);
+		else if (!aiOpen && !aiPane.isCollapsed()) aiPane.collapse();
+	});
 	let dialogOpen = $state(false);
 	let editing = $state<ConnectionConfig | null>(null);
 	let deleting = $state<ConnectionConfig | null>(null);
@@ -131,60 +140,109 @@
 
 <svelte:window onkeydown={onKeydown} oncontextmenu={onContextMenu} />
 
-<div class="flex h-screen w-screen flex-col overflow-hidden">
+<div class="flex h-screen w-screen flex-col overflow-hidden bg-chrome">
 	<TopBar
-		onNewConnection={() => edit(null)}
 		onNewQuery={newQuery}
 		onOpenPalette={() => (paletteOpen = true)}
+		onToggleAi={() => (aiOpen = !aiOpen)}
+		{aiOpen}
 	/>
-	<Resizable.PaneGroup direction="horizontal" class="min-h-0 flex-1">
-		<Resizable.Pane defaultSize={20} minSize={12} maxSize={45} class="flex flex-col bg-sidebar">
-			<Sidebar bind:this={sidebarView} onEdit={edit} onDelete={(c) => (deleting = c)} />
-		</Resizable.Pane>
-		<Resizable.Handle />
-		<Resizable.Pane defaultSize={80} class="flex min-w-0 flex-col">
-			{#if tabs.items.length}
-				<TabBar onNewQuery={newQuery} />
-				<div class="relative min-h-0 flex-1">
-					<!-- Inactive tabs stay mounted so editors keep undo history and scroll position. -->
-					{#each tabs.items as tab (tab.id)}
-						<div class="absolute inset-0" class:hidden={tab.id !== tabs.activeId}>
-							{#if tab.kind === 'query'}
-								<QueryTabView {tab} />
-							{:else if tab.kind === 'table'}
-								<TableTabView {tab} />
-							{:else}
-								<ErDiagramView {tab} />
-							{/if}
-						</div>
-					{/each}
-				</div>
-			{:else}
-				<div
-					class="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground"
-				>
-					<p>Open a connection on the left, then double-click a table or start a query.</p>
-					<div class="flex gap-2">
-						<Button size="sm" variant="outline" onclick={newQuery}>
-							<SquareTerminalIcon /> New query <kbd class="ml-1 font-mono text-xs">⌘T</kbd>
-						</Button>
-						<Button size="sm" variant="outline" onclick={() => (paletteOpen = true)}>
-							<SearchIcon /> Go to… <kbd class="ml-1 font-mono text-xs">⌘K</kbd>
-						</Button>
+	<div class="flex min-h-0 flex-1 pr-2 pb-2">
+		<Resizable.PaneGroup direction="horizontal" autoSaveId="guckpg.layout" class="min-h-0 flex-1">
+			<Resizable.Pane
+				id="sidebar"
+				order={1}
+				defaultSize={20}
+				minSize={12}
+				maxSize={45}
+				class="flex flex-col"
+			>
+				<Sidebar bind:this={sidebarView} onEdit={edit} onDelete={(c) => (deleting = c)} />
+			</Resizable.Pane>
+			<Resizable.Handle variant="gap" />
+			<Resizable.Pane
+				id="main"
+				order={2}
+				defaultSize={80}
+				minSize={30}
+				class="flex min-w-0 flex-col rounded-xl border bg-background shadow-panel"
+			>
+				{#if tabs.items.length}
+					<TabBar onNewQuery={newQuery} />
+					<div class="relative min-h-0 flex-1">
+						<!-- Inactive tabs stay mounted so editors keep undo history and scroll position. -->
+						{#each tabs.items as tab (tab.id)}
+							<div class="absolute inset-0" class:hidden={tab.id !== tabs.activeId}>
+								{#if tab.kind === 'query'}
+									<QueryTabView {tab} />
+								{:else if tab.kind === 'table'}
+									<TableTabView {tab} />
+								{:else}
+									<ErDiagramView {tab} />
+								{/if}
+							</div>
+						{/each}
 					</div>
-					{#if tabs.closed.length}
-						<Button
-							size="sm"
-							variant="ghost"
-							onclick={() => tabs.reopenClosed((id) => !!connections.get(id))}
-						>
-							<HistoryIcon /> Reopen closed tab <kbd class="ml-1 font-mono text-xs">⌘⇧T</kbd>
-						</Button>
-					{/if}
-				</div>
-			{/if}
-		</Resizable.Pane>
-	</Resizable.PaneGroup>
+				{:else}
+					<div class="flex h-full flex-col items-center justify-center px-10 pb-[10vh]">
+						<div class="flex w-full max-w-sm flex-col gap-5">
+							<div class="flex flex-col gap-1.5">
+								<h1 class="text-xl font-medium tracking-[-0.015em]">Nothing open yet</h1>
+								<p class="text-ink-2">
+									Pick a connection on the left, then double-click a table or start a query.
+								</p>
+							</div>
+							<div class="flex flex-col">
+								{#snippet action(
+									label: string,
+									icon: typeof SearchIcon,
+									shortcut: string,
+									onclick: () => void
+								)}
+									{@const Icon = icon}
+									<button
+										type="button"
+										class="-mx-2 flex h-10 items-center gap-3 rounded-md px-2 text-left text-ink-2 transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground"
+										{onclick}
+									>
+										<Icon class="size-4 text-muted-foreground" />
+										<span>{label}</span>
+										<kbd class="key ml-auto">{shortcut}</kbd>
+									</button>
+								{/snippet}
+								{@render action('New query', SquareTerminalIcon, '⌘T', newQuery)}
+								{@render action('Go to…', SearchIcon, '⌘K', () => (paletteOpen = true))}
+								{#if tabs.closed.length}
+									{@render action('Reopen closed tab', HistoryIcon, '⌘⇧T', () =>
+										tabs.reopenClosed((id) => !!connections.get(id))
+									)}
+								{/if}
+							</div>
+						</div>
+					</div>
+				{/if}
+			</Resizable.Pane>
+			<Resizable.Handle variant="gap" disabled={!aiOpen} class={aiOpen ? '' : 'hidden'} />
+			<!-- Collapsed rather than unmounted, so the chat keeps tracking the active database. -->
+			<Resizable.Pane
+				bind:this={aiPane}
+				id="ai"
+				order={3}
+				defaultSize={0}
+				collapsible
+				collapsedSize={0}
+				minSize={18}
+				maxSize={55}
+				class="min-w-0"
+				onResize={(size) => {
+					if (size > 0) aiSize = size;
+				}}
+				onCollapse={() => (aiOpen = false)}
+			>
+				<AiPanel open={aiOpen} onClose={() => (aiOpen = false)} />
+			</Resizable.Pane>
+		</Resizable.PaneGroup>
+	</div>
 </div>
 
 <ConnectionDialog bind:open={dialogOpen} {editing} />

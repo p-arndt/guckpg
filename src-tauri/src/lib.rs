@@ -1,3 +1,4 @@
+mod ai;
 mod catalog;
 mod commands;
 mod config;
@@ -25,6 +26,7 @@ pub fn run() {
                 )?;
             }
             let dir = app.path().app_config_dir()?;
+            app.manage(ai::AiState::new(&dir));
             app.manage(session::Manager::new(
                 config::ConnectionStore::new(&dir),
                 ssh::KnownHosts::new(&dir),
@@ -32,6 +34,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            ai::ai_get_settings,
+            ai::ai_save_settings,
+            ai::ai_chat,
+            ai::ai_cancel,
             commands::list_connections,
             commands::secret_status,
             commands::save_connection,

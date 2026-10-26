@@ -109,6 +109,11 @@ impl Manager {
         PgConn::connect(&cfg, database, secrets.password.as_deref(), transport).await
     }
 
+    /// AI tools must not share transaction state with editors or the schema tree.
+    pub async fn ephemeral(&self, connection_id: &str, database: &str) -> AppResult<PgConn> {
+        self.open(connection_id, database).await
+    }
+
     /// The tree's connection for `database` (the saved default if empty).
     pub async fn meta(&self, connection_id: &str, database: &str) -> AppResult<Arc<PgConn>> {
         let database = if database.is_empty() {

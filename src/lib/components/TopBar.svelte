@@ -1,61 +1,68 @@
 <script lang="ts">
-	import PlugIcon from '@lucide/svelte/icons/plug';
+	import BotIcon from '@lucide/svelte/icons/bot';
+	import ServerIcon from '@lucide/svelte/icons/server';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
-	import Table2Icon from '@lucide/svelte/icons/table-2';
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import UnplugIcon from '@lucide/svelte/icons/unplug';
 	import SearchIcon from '@lucide/svelte/icons/search';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import { toast } from 'svelte-sonner';
-	import { errorMessage } from '#lib/api.js';
-	import { Badge } from '#lib/components/ui/badge/index.js';
+	import { api, errorMessage } from '#lib/api.js';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import { Separator } from '#lib/components/ui/separator/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { tabs } from '#lib/state/tabs.svelte.js';
 
 	interface Props {
-		onNewConnection: () => void;
 		onNewQuery: () => void;
 		onOpenPalette: () => void;
+		onToggleAi: () => void;
+		aiOpen: boolean;
 	}
 
-	let { onNewConnection, onNewQuery, onOpenPalette }: Props = $props();
+	let { onNewQuery, onOpenPalette, onToggleAi, aiOpen }: Props = $props();
 
-	/**
-	 * The connection and database the toolbar acts on: the active tab's, otherwise the
-	 * first connected connection. Schema only matters for the ER diagram, so table and
-	 * diagram tabs pass theirs through and everything else falls back to `public`.
-	 */
+	/** Tauri on macOS draws the traffic lights over the page (`titleBarStyle: Overlay`). */
+	const overlayTitleBar =
+		typeof window !== 'undefined' &&
+		'__TAURI_INTERNALS__' in window &&
+		/Mac/.test(navigator.userAgent);
+
+	/** The connection and database the toolbar acts on: the active tab's, otherwise the first connected one. */
 	const context = $derived.by(() => {
 		const tab = tabs.active;
 		if (tab) {
 			const connection = connections.get(tab.connectionId);
-			if (!connection) return null;
-			return {
-				connection,
-				database: tab.database,
-				schema: tab.kind === 'query' ? 'public' : tab.schema
-			};
+			return connection ? { connection, database: tab.database } : null;
 		}
 		const connection = connections.list.find((c) => connections.status[c.id] === 'connected');
 		if (!connection) return null;
 		return {
 			connection,
-			database: connections.info[connection.id]?.database ?? connection.database,
-			schema: 'public'
+			database: connections.info[connection.id]?.database ?? connection.database
 		};
 	});
 
-	function newTable() {
+	/** Schemas of the context database, loaded when the menu opens; null while loading. */
+	let schemas = $state<string[] | null>(null);
+
+	async function loadSchemas() {
 		if (!context) return;
-		tabs.openQuery(context.connection.id, context.database, 'SELECT *\nFROM \nLIMIT 100;');
+		schemas = null;
+		try {
+			schemas = await api.listSchemas(context.connection.id, context.database);
+		} catch (e) {
+			schemas = [];
+			toast.error(errorMessage(e));
+		}
 	}
 
-	function newDiagram() {
+	function openDiagram(schema: string) {
 		if (!context) return;
-		tabs.openDiagram(context.connection.id, context.database, context.schema);
+		tabs.openDiagram(context.connection.id, context.database, schema);
 	}
 
 	function refresh() {
@@ -75,65 +82,112 @@
 	}
 </script>
 
-{#snippet toolButton(
-	label: string,
-	tip: string,
-	icon: typeof PlugIcon,
-	onclick: () => void,
-	disabled: boolean
-)}
-	<Tooltip.Root>
-		<Tooltip.Trigger>
-			{#snippet child({ props })}
-				{@const Icon = icon}
-				<Button
-					{...props}
-					variant="ghost"
-					class="h-auto w-14 flex-col gap-1 px-1 py-1.5 text-[11px] font-normal"
-					{disabled}
-					{onclick}
-				>
-					<Icon class="size-[18px]" />
-					<span>{label}</span>
-				</Button>
-			{/snippet}
-		</Tooltip.Trigger>
-		<Tooltip.Content>{tip}</Tooltip.Content>
-	</Tooltip.Root>
-{/snippet}
+<!-- The window has no native title bar on macOS: this bar is the drag region and the
+traffic lights sit in its left inset. Only the bar itself drags, never its controls. -->
+<header
+	class="flex h-12 shrink-0 items-center gap-3 pr-2 {overlayTitleBar ? 'pl-[84px]' : 'pl-3'}"
+	data-tauri-drag-region
+>
+	<span class="text-[15px] font-semibold tracking-[-0.02em]" data-tauri-drag-region>guckpg</span>
 
-<div class="flex h-[52px] shrink-0 items-center gap-1 border-b bg-sidebar px-2">
-	{@render toolButton('Connection', 'New connection', PlugIcon, onNewConnection, false)}
-	{@render toolButton('New Query', 'New query (⌘T)', SquareTerminalIcon, onNewQuery, !context)}
-	{@render toolButton('Table', 'New query for a table', Table2Icon, newTable, !context)}
-	{@render toolButton('ER Diagram', 'Open ER diagram', NetworkIcon, newDiagram, !context)}
-	<Separator orientation="vertical" class="mx-1 h-8" />
-	{@render toolButton('Refresh', 'Reload the schema tree', RefreshCwIcon, refresh, !context)}
-	{@render toolButton('Disconnect', 'Close tabs and disconnect', UnplugIcon, disconnect, !context)}
+	<div class="flex min-w-0 flex-1 basis-0 items-center gap-2 text-sm" data-tauri-drag-region>
+		{#if context}
+			<DropdownMenu.Root onOpenChange={(open) => open && loadSchemas()}>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							type="button"
+							class="flex h-8 min-w-0 items-center gap-2 rounded-lg px-2 transition-[background-color] duration-(--dur-micro) hover:bg-hover data-[state=open]:bg-hover"
+							title="Connection actions"
+						>
+							<ServerIcon
+								class="size-3.5 shrink-0 text-muted-foreground"
+								style={context.connection.color ? `color: ${context.connection.color}` : ''}
+							/>
+							<span class="truncate font-medium">{context.connection.name}</span>
+							<ChevronDownIcon class="size-3.5 shrink-0 text-muted-foreground" />
+						</button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="start" class="w-56">
+					<DropdownMenu.Item onSelect={onNewQuery}>
+						<SquareTerminalIcon /> New query
+						<DropdownMenu.Shortcut>⌘T</DropdownMenu.Shortcut>
+					</DropdownMenu.Item>
+					<DropdownMenu.Sub>
+						<DropdownMenu.SubTrigger>
+							<NetworkIcon /> ER diagram
+						</DropdownMenu.SubTrigger>
+						<DropdownMenu.SubContent class="max-h-80 w-48 overflow-y-auto">
+							<DropdownMenu.Label class="text-xs font-normal text-muted-foreground">
+								Schema in {context.database}
+							</DropdownMenu.Label>
+							{#if schemas === null}
+								<DropdownMenu.Item disabled>Loading…</DropdownMenu.Item>
+							{:else}
+								{#each schemas as schema (schema)}
+									<DropdownMenu.Item onSelect={() => openDiagram(schema)}
+										>{schema}</DropdownMenu.Item
+									>
+								{:else}
+									<DropdownMenu.Item disabled>No schemas</DropdownMenu.Item>
+								{/each}
+							{/if}
+						</DropdownMenu.SubContent>
+					</DropdownMenu.Sub>
+					<DropdownMenu.Separator />
+					<DropdownMenu.Item onSelect={refresh}>
+						<RefreshCwIcon /> Reload schema
+					</DropdownMenu.Item>
+					<DropdownMenu.Item onSelect={disconnect}>
+						<UnplugIcon /> Disconnect
+					</DropdownMenu.Item>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
+			{#if context.connection.readOnly}
+				<span class="chip"><LockIcon class="size-3" />read-only</span>
+			{/if}
+		{:else}
+			<span class="text-muted-foreground">Not connected</span>
+		{/if}
+	</div>
 
 	<button
-		class="mx-auto flex h-7 w-full max-w-72 min-w-36 items-center gap-2 rounded-md border bg-background px-2.5 text-xs text-muted-foreground hover:border-foreground/30"
+		type="button"
+		class="flex h-8 w-full max-w-md min-w-40 flex-[2] basis-0 items-center gap-2 rounded-lg border bg-background px-2.5 text-[13px] text-muted-foreground shadow-panel transition-[border-color,color] duration-(--dur-micro) hover:border-rule-2 hover:text-foreground"
 		onclick={onOpenPalette}
 	>
-		<SearchIcon class="size-3.5" />
+		<SearchIcon class="size-3.5 shrink-0" />
 		<span class="truncate">Go to table, tab, connection…</span>
-		<kbd class="ml-auto font-mono text-[10px]">⌘K</kbd>
+		<kbd class="key ml-auto">⌘K</kbd>
 	</button>
 
-	{#if context}
-		<div
-			class="flex min-w-0 items-center gap-2 rounded-md border bg-background px-2.5 py-1 text-xs"
+	<div class="flex flex-1 basis-0 items-center justify-end gap-1" data-tauri-drag-region>
+		<Button
+			size="sm"
+			variant="outline"
+			disabled={!context}
+			onclick={onNewQuery}
+			title="New query (⌘T)"
 		>
-			<span
-				class="size-2 shrink-0 rounded-full"
-				style:background-color={context.connection.color ?? 'var(--muted-foreground)'}
-			></span>
-			<span class="truncate font-medium">{context.connection.name}</span>
-			<span class="text-muted-foreground">·</span>
-			<span class="truncate text-muted-foreground">{context.database}</span>
-			{#if context.connection.readOnly}
-				<Badge variant="outline">read-only</Badge>
-			{/if}
-		</div>
-	{/if}
-</div>
+			<SquareTerminalIcon /> New query
+		</Button>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				{#snippet child({ props })}
+					<Button
+						{...props}
+						size="sm"
+						variant={aiOpen ? 'secondary' : 'ghost'}
+						aria-pressed={aiOpen}
+						onclick={onToggleAi}
+					>
+						<BotIcon /> AI
+					</Button>
+				{/snippet}
+			</Tooltip.Trigger>
+			<Tooltip.Content>AI assistant</Tooltip.Content>
+		</Tooltip.Root>
+	</div>
+</header>

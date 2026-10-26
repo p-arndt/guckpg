@@ -1,4 +1,6 @@
-# sv
+# guckpg
+
+A desktop PostgreSQL client built with Tauri and Svelte.
 
 ## Releases
 
@@ -62,6 +64,56 @@ The SQL scripts in `dev/` target `public`: run `demo.sql`, optionally
 Each seed has a matching `*-check.sql`; `demo-performance-queries.sql` contains
 sample performance queries. `migrate-demo-to-public.sql` moves older demo-schema
 data transactionally and rejects name collisions rather than replacing objects.
+
+## AI assistant
+
+Open **AI → Settings**, choose a provider, enter its base URL and model, and save:
+
+| Provider             | Base URL example             | Protocol            |
+| -------------------- | ---------------------------- | ------------------- |
+| Ollama               | `http://localhost:11434`     | Native `/api/chat`  |
+| OpenAI Responses API | `https://api.openai.com/v1`  | `/responses`        |
+| OpenAI-compatible    | Your provider's API base URL | `/chat/completions` |
+
+Use a model that supports function calling. API keys are stored in the OS keychain,
+and **Authentication → Basic Auth** supports endpoints behind an authenticated
+proxy, including Ollama. Enter username and password once; both are stored in the
+keychain separately from bearer tokens. Leave both fields blank to keep saved
+credentials, or use the deletion checkbox. Choose **None** to send no authorization
+header. Authentication credentials are
+bound to the provider and endpoint; chat remains in memory. Prompts and inspected
+schema are sent to the configured endpoint. Enable **Allow read-only queries and
+row samples** to let the assistant filter, join, group, sort, and aggregate data
+with COUNT/SUM/AVG/MIN/MAX. It submits a structured query plan: the backend builds
+the SELECT, binds filter parameters, quotes identifiers and checks table access.
+Executed queries and their parameters appear in the tool details.
+
+Reads use isolated read-only transactions, a 5-second statement timeout, bounded
+results (100 rows, 32 columns, 64 KiB output), and a small allowlist of built-in
+types, operators and aggregates. Views, RLS tables, system schemas, custom types,
+custom access methods and expression/partial indexes are rejected to avoid
+indirect code execution. Inherited rows are excluded with `ONLY`. Sample reads
+use the same relation/type checks. These restrictions cannot protect against a
+compromised database server; use a dedicated SELECT-only DB user for an additional
+permission boundary. Read-only queries can still scan large tables until timeout.
+
+Switching databases, changing settings, or clearing chat revokes data access.
+Suggested free-form SQL opens in a new editor tab for manual review; the assistant
+cannot execute arbitrary SQL, call arbitrary functions or modify data.
+
+The Rust adapters handle protocol-specific tool calls; OpenAI uses stateless
+Responses requests with reasoning items preserved during each tool loop. Requests
+are cancellable and bounded by time, response size, and tool-call count. This first
+version displays complete replies rather than streaming tokens.
+
+Run frontend checks with `pnpm check`, `pnpm test`, `pnpm lint`, and `pnpm build`;
+Rust checks with `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+and `cargo test`. A dedicated AI database test is ignored by default: point
+`GUCKPG_AI_TEST_PORT` at a **disposable localhost** Postgres containing an empty
+`guckpg_ai_test` database and run
+`cargo test ai:: -- --ignored`.
+
+## Svelte development
 
 Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
 

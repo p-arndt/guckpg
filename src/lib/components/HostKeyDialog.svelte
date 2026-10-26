@@ -15,17 +15,20 @@
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
-				<ShieldQuestionIcon class="size-5" /> Unknown SSH server
+				<ShieldQuestionIcon class="size-4 text-muted-foreground" /> Unknown SSH server
 			</AlertDialog.Title>
 			<AlertDialog.Description>
-				guckpg has never seen the host key of
-				<span class="font-medium text-foreground">{pending?.host}:{pending?.port}</span>. Compare
-				the fingerprint with the server (<code class="font-mono text-xs"
+				First connection to
+				<span class="font-medium text-foreground">{pending?.host}:{pending?.port}</span>. Check the
+				fingerprint on the server with
+				<code class="font-mono text-xs text-ink-2"
 					>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code
-				>) before trusting it.
+				> before trusting it.
 			</AlertDialog.Description>
 		</AlertDialog.Header>
-		<code class="rounded-lg border bg-background p-2 font-mono text-xs break-all select-text">
+		<code
+			class="measured rounded-md border bg-background px-2.5 py-2 text-xs leading-relaxed break-all text-ink-2 select-text"
+		>
 			{pending?.fingerprint}
 		</code>
 		<AlertDialog.Footer>

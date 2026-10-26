@@ -277,7 +277,7 @@
 					</span>
 				</button>
 			{:else}
-				<p class="px-3 py-6 text-sm text-muted-foreground">
+				<p class="px-3 py-8 text-center text-[13px] text-muted-foreground">
 					{loading > 0 ? 'Loading tables…' : `Nothing matches “${query}”.`}
 				</p>
 			{/each}

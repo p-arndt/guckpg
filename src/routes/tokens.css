@@ -1,6 +1,7 @@
 /* Console tokens. Light is the theme's paper colourway, dark is graphite.
- * Amber marks what a person did or is about to do (the primary action, a selection,
- * an unsaved edit); cool marks what the database measured (counts, timings, versions).
+ * The primary action is neutral (ink on paper, inverted) so colour stays free for meaning.
+ * Signal blue marks what a person is pointing at or has changed (selection, focus, an
+ * unsaved edit); cool marks what the database measured (counts, timings, versions).
  * Ok and bad exist for diffs and connection state only. */
 
 :root {
@@ -37,13 +38,16 @@
 	--color-muted: oklch(46% 0.012 60);
 	--color-rule: oklch(88.5% 0.008 85);
 	--color-rule-2: oklch(79% 0.01 85);
-	--color-field-edge: oklch(64% 0.012 85);
+	--color-field-edge: oklch(76% 0.01 85);
 
-	--color-accent: oklch(76% 0.15 76);
-	--color-accent-ink: oklch(20% 0.04 70);
-	--color-accent-text: oklch(50% 0.13 70);
-	--color-accent-soft: oklch(93% 0.05 82);
-	--color-focus: oklch(56% 0.15 70);
+	--color-action: oklch(21% 0.008 260);
+	--color-action-ink: oklch(98.5% 0.002 260);
+
+	--color-accent: oklch(57% 0.19 264);
+	--color-accent-ink: oklch(99% 0.002 264);
+	--color-accent-text: oklch(50% 0.18 264);
+	--color-accent-soft: oklch(94.5% 0.03 264);
+	--color-focus: oklch(55% 0.19 264);
 
 	--color-cool: oklch(50% 0.14 250);
 	--color-cool-soft: oklch(93.5% 0.03 245);
@@ -51,6 +55,8 @@
 	--color-ok-soft: oklch(94.5% 0.04 150);
 	--color-bad: oklch(52% 0.18 25);
 	--color-bad-soft: oklch(94.5% 0.03 25);
+	/* Solid fill under white text: destructive buttons */
+	--color-bad-fill: oklch(55% 0.2 25);
 	--color-scrim: oklch(19% 0.01 60 / 35%);
 
 	/* Tree icon colours per object kind, so tables, views and routines read apart at a glance */
@@ -67,8 +73,9 @@
 	--syntax-string: oklch(47% 0.12 150);
 	--syntax-number: oklch(52% 0.13 60);
 	--syntax-type: oklch(42% 0.06 250);
+	--syntax-property: oklch(50% 0.13 300);
 	--syntax-active-line: oklch(19% 0.01 60 / 4%);
-	--syntax-selection: oklch(76% 0.15 76 / 28%);
+	--syntax-selection: oklch(57% 0.19 264 / 18%);
 
 	--font-display: 'Host Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
 	--font-body: var(--font-display);
@@ -95,13 +102,16 @@
 	--color-muted: oklch(71% 0.01 250);
 	--color-rule: oklch(26.5% 0.01 260);
 	--color-rule-2: oklch(35% 0.012 260);
-	--color-field-edge: oklch(52% 0.012 250);
+	--color-field-edge: oklch(38% 0.012 260);
 
-	--color-accent: oklch(82% 0.15 80);
-	--color-accent-ink: oklch(18% 0.04 75);
-	--color-accent-text: oklch(82% 0.15 80);
-	--color-accent-soft: oklch(29% 0.05 80);
-	--color-focus: oklch(82% 0.15 80);
+	--color-action: oklch(96% 0.003 260);
+	--color-action-ink: oklch(17% 0.008 260);
+
+	--color-accent: oklch(68% 0.15 264);
+	--color-accent-ink: oklch(16% 0.03 264);
+	--color-accent-text: oklch(78% 0.11 264);
+	--color-accent-soft: oklch(27% 0.055 264);
+	--color-focus: oklch(70% 0.15 264);
 
 	--color-cool: oklch(77% 0.12 245);
 	--color-cool-soft: oklch(29% 0.05 245);
@@ -109,6 +119,7 @@
 	--color-ok-soft: oklch(24.5% 0.03 150);
 	--color-bad: oklch(70% 0.17 25);
 	--color-bad-soft: oklch(24.5% 0.035 25);
+	--color-bad-fill: oklch(56% 0.19 25);
 	--color-scrim: oklch(8% 0.006 250 / 60%);
 
 	--kind-table: oklch(75% 0.11 255);
@@ -124,8 +135,9 @@
 	--syntax-string: oklch(78% 0.13 150);
 	--syntax-number: oklch(82% 0.12 75);
 	--syntax-type: oklch(80% 0.05 245);
+	--syntax-property: oklch(78% 0.1 300);
 	--syntax-active-line: oklch(95% 0.005 250 / 4%);
-	--syntax-selection: oklch(82% 0.15 80 / 22%);
+	--syntax-selection: oklch(68% 0.15 264 / 26%);
 
 	--shadow-panel: 0 1px 3px oklch(5% 0.006 260 / 45%);
 }

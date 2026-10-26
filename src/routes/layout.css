@@ -1,6 +1,6 @@
 /* Hallmark · shape: app screen · genre: modern-minimal · theme: Console (deal 2/3, seed desktop-postgres-client-developers-48e1·592dc79e·2026-10-25·r0) · redesign: full
- * nav: kept shell (top bar, sidebar tree, tab strip) · signature: the result grid as a diff (ok and bad gutters, amber edits, cool readings) · states: loading, empty, error, full on results, tables and the tree · console: graphite (dark), paper (light)
- * axes: dark/grotesk-sans/chromatic-amber · posture: restrained · contrast: pass · v2.0.0 */
+ * nav: kept shell (top bar, sidebar tree, tab strip) · signature: the result grid as a diff (ok and bad gutters, signal-blue edits, cool readings) · states: loading, empty, error, full on results, tables and the tree · console: graphite (dark), paper (light)
+ * axes: dark/grotesk-sans/neutral-action+signal-blue · posture: restrained · contrast: pass · v2.0.0 */
 /* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V3 · weakest: V, the shell stays a familiar IDE layout on purpose; the variety lives in the grid's diff gutters and the measured readings */
 /* Hallmark · dismissed 74 · the six connection colours in ConnectionDialog are persisted per connection in the user's config, so they stay as stored data */
 @import 'tailwindcss';
@@ -22,8 +22,8 @@
 	--card-foreground: var(--color-ink);
 	--popover: var(--color-paper-2);
 	--popover-foreground: var(--color-ink);
-	--primary: var(--color-accent);
-	--primary-foreground: var(--color-accent-ink);
+	--primary: var(--color-action);
+	--primary-foreground: var(--color-action-ink);
 	--secondary: var(--color-hover);
 	--secondary-foreground: var(--color-ink);
 	--muted: var(--color-paper);
@@ -37,8 +37,8 @@
 	--radius: 8px;
 	--sidebar: var(--color-paper);
 	--sidebar-foreground: var(--color-ink);
-	--sidebar-primary: var(--color-accent);
-	--sidebar-primary-foreground: var(--color-accent-ink);
+	--sidebar-primary: var(--color-action);
+	--sidebar-primary-foreground: var(--color-action-ink);
 	--sidebar-accent: var(--color-hover);
 	--sidebar-accent-foreground: var(--color-ink);
 	--sidebar-border: var(--color-rule);
@@ -80,6 +80,7 @@
 	--color-raised: var(--color-paper-2);
 	--color-grid-head: color-mix(in oklab, var(--color-hover) 55%, var(--color-paper-3));
 	--color-work: var(--color-paper-3);
+	--color-hover-row: color-mix(in oklab, var(--color-hover) 45%, var(--color-paper-3));
 	--color-hover: var(--color-hover);
 	--color-ink-2: var(--color-ink-2);
 	--color-rule-2: var(--color-rule-2);
@@ -93,6 +94,7 @@
 	--color-ok-soft: var(--color-ok-soft);
 	--color-bad: var(--color-bad);
 	--color-bad-soft: var(--color-bad-soft);
+	--color-bad-fill: var(--color-bad-fill);
 	--color-scrim: var(--color-scrim);
 	--color-kind-table: var(--kind-table);
 	--color-kind-view: var(--kind-view);
@@ -207,6 +209,14 @@
 	}
 	.tok-typeName {
 		color: var(--syntax-type);
+	}
+	.tok-propertyName {
+		color: var(--syntax-property);
+	}
+	/* JSON's null parses as a keyword; it reads as a value like true and 42. */
+	.json-tokens .tok-keyword {
+		color: var(--syntax-number);
+		font-weight: inherit;
 	}
 	.tok-comment {
 		color: var(--color-muted);

@@ -33,14 +33,15 @@
 
 <Dialog.Root {open} onOpenChange={changeOpen}>
 	<Dialog.Content
-		class="flex h-[85vh] w-[min(1100px,95vw)] max-w-none flex-col sm:max-w-none"
+		class="flex h-[85vh] w-[min(1100px,95vw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
 		showCloseButton={!busy}
 	>
-		<Dialog.Header>
+		<!-- The designer brings its own header and footer bands, so it runs edge to edge below this. -->
+		<Dialog.Header class="gap-1 border-b px-5 pt-4 pb-3.5">
 			<Dialog.Title>Create table</Dialog.Title>
-			<Dialog.Description
-				>Define columns, keys and indexes in {schema}, then preview and apply your changes.</Dialog.Description
-			>
+			<Dialog.Description>
+				In <span class="measured text-ink-2">{schema}</span>. You review the SQL before it runs.
+			</Dialog.Description>
 		</Dialog.Header>
 		{#if open}
 			<div class="min-h-0 flex-1">

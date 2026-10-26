@@ -36,7 +36,7 @@
 					onfocus={(e) => e.currentTarget.select()}
 				/>
 			</div>
-			<Dialog.Footer class="gap-2">
+			<Dialog.Footer>
 				<Button type="button" variant="outline" onclick={() => prompt.answer(null)}>Cancel</Button>
 				<Button type="submit" disabled={!value.trim()}>{pending?.confirmLabel ?? 'OK'}</Button>
 			</Dialog.Footer>

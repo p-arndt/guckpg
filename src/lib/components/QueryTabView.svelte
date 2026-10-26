@@ -232,7 +232,7 @@
 						>
 							<PlayIcon class="fill-current" /> Run
 							<kbd
-								class="ml-1 rounded-[4px] bg-signal-ink/10 px-1 text-[11px] leading-4 font-normal"
+								class="ml-1 rounded-[4px] bg-primary-foreground/15 px-1 text-[11px] leading-4 font-normal"
 								>⌘↵</kbd
 							>
 						</Button>

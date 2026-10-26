@@ -147,21 +147,25 @@
 							<Label for="c-name">Name</Label>
 							<Input id="c-name" bind:value={form.name} placeholder={form.host || 'My database'} />
 						</div>
-						<div class="flex h-8 items-center gap-1">
+						<!-- Out of the tab order: tabbing from Name should land on Host, not seven swatches. -->
+						<div class="flex h-8 items-center gap-2 px-1">
 							<button
 								type="button"
-								class="size-5 rounded-full border-2 {form.color === null
-									? 'border-foreground'
-									: 'border-transparent'} bg-muted"
+								tabindex="-1"
+								class="size-4 rounded-full border border-dashed border-rule-2 transition-shadow {form.color ===
+								null
+									? 'ring-2 ring-foreground ring-offset-2 ring-offset-popover'
+									: ''}"
 								title="No color"
 								onclick={() => (form.color = null)}
 							></button>
 							{#each COLORS as color (color)}
 								<button
 									type="button"
-									class="size-5 rounded-full border-2 {form.color === color
-										? 'border-foreground'
-										: 'border-transparent'}"
+									tabindex="-1"
+									class="size-4 rounded-full transition-shadow {form.color === color
+										? 'ring-2 ring-foreground ring-offset-2 ring-offset-popover'
+										: ''}"
 									style:background-color={color}
 									title="Mark with color"
 									onclick={() => (form.color = color)}
@@ -237,7 +241,8 @@
 
 					<Label class="flex items-center gap-2 font-normal">
 						<Checkbox bind:checked={form.readOnly} />
-						Read-only (every transaction is read-only)
+						Read-only
+						<span class="text-muted-foreground">· transactions can't write</span>
 					</Label>
 				</Tabs.Content>
 
@@ -324,11 +329,6 @@
 							</div>
 						{:else}
 							<div class="grid gap-1.5">
-								<p class="text-xs text-muted-foreground">
-									Like <code class="font-mono">ssh</code> in the terminal: keys from the SSH agent,
-									then <code class="font-mono">~/.ssh/id_ed25519</code>,
-									<code class="font-mono">id_ecdsa</code>, <code class="font-mono">id_rsa</code>.
-								</p>
 								<Label for="s-auto-pass">Key passphrase</Label>
 								<Input
 									id="s-auto-pass"
@@ -336,6 +336,11 @@
 									bind:value={secrets.sshPassphrase}
 									placeholder={savedPlaceholder(stored.sshPassphrase) || 'only if your key has one'}
 								/>
+								<p class="text-xs text-muted-foreground">
+									Like <code class="font-mono">ssh</code> in the terminal: keys from the SSH agent,
+									then <code class="font-mono">~/.ssh/id_ed25519</code>,
+									<code class="font-mono">id_ecdsa</code>, <code class="font-mono">id_rsa</code>.
+								</p>
 							</div>
 						{/if}
 						<p class="text-xs text-muted-foreground">
@@ -349,14 +354,21 @@
 
 			{#if problem}
 				<p
-					class="rounded-lg border border-[color-mix(in_oklab,var(--color-bad),transparent_55%)] bg-bad-soft p-3 text-sm break-words text-foreground select-text"
+					class="rounded-lg border border-[color-mix(in_oklab,var(--color-bad),transparent_55%)] bg-bad-soft px-3 py-2 text-[13px] break-words text-foreground select-text"
 				>
 					{problem}
 				</p>
 			{/if}
 
-			<Dialog.Footer class="gap-2">
-				<Button type="button" variant="outline" disabled={busy !== null} onclick={test}>
+			<Dialog.Footer>
+				<!-- Test is a side check, not an answer to the dialog, so it sits apart from Save. -->
+				<Button
+					type="button"
+					variant="outline"
+					class="sm:mr-auto"
+					disabled={busy !== null}
+					onclick={test}
+				>
 					{#if busy === 'test'}<LoaderIcon class="animate-spin" />{:else}<PlugZapIcon />{/if}
 					Test
 				</Button>

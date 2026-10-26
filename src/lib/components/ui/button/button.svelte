@@ -8,7 +8,7 @@
 		variants: {
 			variant: {
 				default:
-					'bg-signal text-signal-ink border-signal hover:bg-[color-mix(in_oklab,var(--color-accent),var(--color-ink)_12%)] active:bg-[color-mix(in_oklab,var(--color-accent),var(--color-ink)_20%)]',
+					'bg-primary text-primary-foreground border-primary hover:bg-[color-mix(in_oklab,var(--color-action),var(--color-paper-3)_14%)] active:bg-[color-mix(in_oklab,var(--color-action),var(--color-paper-3)_22%)]',
 				outline:
 					'border-rule-2 bg-raised text-foreground hover:bg-hover active:bg-[color-mix(in_oklab,var(--color-hover),var(--color-ink)_6%)] aria-expanded:bg-hover',
 				secondary:
@@ -16,7 +16,7 @@
 				ghost:
 					'text-muted-foreground hover:bg-hover hover:text-foreground active:bg-[color-mix(in_oklab,var(--color-hover),var(--color-ink)_6%)] aria-expanded:bg-hover aria-expanded:text-foreground aria-pressed:bg-hover aria-pressed:text-foreground',
 				destructive:
-					'border-[color-mix(in_oklab,var(--color-bad),transparent_55%)] bg-bad-soft text-bad hover:bg-[color-mix(in_oklab,var(--color-bad-soft),var(--color-bad)_12%)]',
+					'border-bad-fill bg-bad-fill text-white hover:bg-[color-mix(in_oklab,var(--color-bad-fill),black_10%)] active:bg-[color-mix(in_oklab,var(--color-bad-fill),black_18%)]',
 				link: 'text-foreground underline decoration-rule-2 underline-offset-4 hover:decoration-signal-text'
 			},
 			size: {

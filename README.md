@@ -85,7 +85,7 @@ docker compose up -d postgres
 docker compose exec -T postgres psql -U guckpg -d guckpg < dev/demo.sql
 ```
 
-Optional datasets and validation scripts are in [`dev/`](dev/). The AI database test is ignored by default; run `cargo test ai:: -- --ignored` with `GUCKPG_AI_TEST_PORT` pointing to a disposable localhost PostgreSQL instance containing an empty `guckpg_ai_test` database.
+Optional datasets and validation scripts are in [`dev/`](dev/). Database tests skip themselves without a server; `just test-it` starts the compose services and runs all of them.
 
 ## Releasing
 

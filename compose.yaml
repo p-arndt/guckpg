@@ -1,6 +1,7 @@
 # Local test targets: a Postgres and an SSH server that can reach it as
 # `postgres`, the same situation as a VPS with Postgres in a container.
-# `just db-up`, then `just test-it` runs the integration tests against both.
+# `just test-it` starts them (`just db-up`) and runs all Rust tests against both;
+# `just db-down` stops them.
 services:
   postgres:
     image: postgres:18
@@ -25,3 +26,11 @@ services:
       DOCKER_MODS: linuxserver/mods:openssh-server-ssh-tunnel
     ports:
       - 127.0.0.1:52222:2222
+    # `up --wait` must not return before the mod has enabled forwarding and
+    # sshd listens, or the tunnel test races the container start.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - grep -q '^AllowTcpForwarding yes' /config/sshd/sshd_config && nc -z localhost 2222
+      interval: 2s
+      retries: 60

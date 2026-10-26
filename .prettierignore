@@ -11,3 +11,6 @@ bun.lockb
 # Rust / Tauri
 /target/
 /src-tauri/
+
+# Agent settings and worktrees
+/.claude/

@@ -416,6 +416,13 @@ async fn tunnels_through_ssh() {
     assert!(err.to_string().contains("no-such-container"), "{err}");
 
     tunnel.close().await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !conn.is_closed() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("connection did not detect the closed tunnel");
 }
 
 #[tokio::test]

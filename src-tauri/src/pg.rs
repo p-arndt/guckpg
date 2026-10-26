@@ -233,6 +233,7 @@ impl PgConn {
 
     pub fn is_closed(&self) -> bool {
         self.client.is_closed()
+            || matches!(&self.transport, Transport::Tunnel(tunnel) if tunnel.is_closed())
     }
 
     /// Ask the server to cancel whatever this connection is running. Postgres

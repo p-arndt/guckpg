@@ -15,6 +15,13 @@ notarized, so operating systems may warn when opening them.
 
 ## Database objects
 
+Use **Row form** above any result grid, the row context menu, or **Shift+Enter**
+to open all fields of a row in a large form. Previous/Next navigates the loaded
+rows in their displayed order. Applying or navigating stages edits in the grid;
+use the grid's **Save** to write them. Computed columns and read-only results
+remain read-only. New-row fields distinguish database defaults, NULL and empty
+text; JSON formatting preserves the original numeric tokens.
+
 Expand a schema to browse tables, views, materialized views, functions,
 procedures, triggers and sequences. Routine signatures distinguish overloads;
 trigger labels include their table.

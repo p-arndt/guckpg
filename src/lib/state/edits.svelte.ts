@@ -125,7 +125,7 @@ export class GridEdits {
 		this.#mutate(() => this.inserted.push(Array<NewCell>(columns).fill(DEFAULT)));
 	}
 
-	setNewCell(index: number, col: number, value: Cell) {
+	setNewCell(index: number, col: number, value: NewCell) {
 		if (this.inserted[index][col] === value) return;
 		this.#mutate(() => (this.inserted[index][col] = value));
 	}

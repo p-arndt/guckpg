@@ -28,6 +28,8 @@
 	} from '#lib/grid.js';
 	import { DEFAULT, GridEdits, buildChanges, type NewCell } from '#lib/state/edits.svelte.js';
 	import ValueDialog, { type Viewing } from './ValueDialog.svelte';
+	import RowFormDialog, { type RowViewing } from './RowFormDialog.svelte';
+	import PanelsTopLeftIcon from '@lucide/svelte/icons/panels-top-left';
 
 	type Sort = { column: string; dir: 'asc' | 'desc' } | null;
 
@@ -80,6 +82,7 @@
 	let selected = $state<{ row: number; col: number } | null>(null);
 	let localSort = $state<Sort>(null);
 	let viewing = $state<Viewing | null>(null);
+	let rowViewing = $state<RowViewing | null>(null);
 	let editing = $state<{ row: number; col: number; draft: string } | null>(null);
 	let saving = $state(false);
 	let preview = $state<string[] | null>(null);
@@ -99,6 +102,7 @@
 				widths = columnWidths(columns, loaded);
 			}
 			editing = null;
+			rowViewing = null;
 			edits.reset();
 			if (!sameShape) {
 				selected = null;
@@ -148,7 +152,7 @@
 	}
 
 	function canEdit(item: Item, col: number): boolean {
-		if (!editable || source?.columns[col] == null) return false;
+		if (!editable || saving || source?.columns[col] == null) return false;
 		return item.kind === 'new' || !edits.deleted[item.orig];
 	}
 
@@ -189,6 +193,50 @@
 			column: columns[col],
 			value: cellValue(item, col) ?? null,
 			save: canEdit(item, col) ? (value) => setValue(item, col, value) : undefined
+		};
+	}
+
+	function openRowForm(row: number) {
+		const item = items[row];
+		if (!item || saving) return;
+		commitEdit();
+		selected = { row, col: selected?.col ?? 0 };
+		rowViewing = {
+			key: item.kind === 'row' ? `row:${item.orig}` : `new:${item.index}`,
+			number: rowOffset + row + 1,
+			position: row,
+			total: items.length,
+			isNew: item.kind === 'new',
+			deleted: item.kind === 'row' && Boolean(edits.deleted[item.orig]),
+			fields: columns.map((name, col) => ({
+				name,
+				type: columnTypes[name] ?? '',
+				value: cellValue(item, col),
+				editable: canEdit(item, col),
+				primaryKey: primaryKeys.includes(name) || Boolean(source?.key.includes(col))
+			})),
+			apply: (changes) => {
+				const allowed = changes.filter(
+					({ column, value }) =>
+						canEdit(item, column) &&
+						cellValue(item, column) !== value &&
+						(item.kind === 'new' || value !== DEFAULT)
+				);
+				if (!allowed.length) return;
+				edits.batch(() => {
+					for (const { column, value } of allowed) {
+						if (item.kind === 'new') edits.setNewCell(item.index, column, value);
+						else if (value !== DEFAULT) setValue(item, column, value);
+					}
+				});
+			},
+			navigate: (delta) => {
+				const next = row + delta;
+				if (next >= 0 && next < items.length) {
+					openRowForm(next);
+					scrollToRow(next);
+				}
+			}
 		};
 	}
 
@@ -357,6 +405,9 @@
 			const col = Math.min(columns.length - 1, Math.max(0, selected.col + move[1]));
 			selected = { row, col };
 			scrollToRow(row);
+		} else if (e.key === 'Enter' && e.shiftKey) {
+			e.preventDefault();
+			openRowForm(selected.row);
 		} else if (e.key === 'Enter' || e.key === 'F2') {
 			e.preventDefault();
 			if (canEdit(items[selected.row], selected.col)) startEdit(selected.row, selected.col);
@@ -398,6 +449,17 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
+	<div class="flex h-8 shrink-0 items-center gap-3 border-b px-2 text-xs">
+		<Button
+			size="xs"
+			variant="ghost"
+			disabled={!items.length || saving}
+			onclick={() => openRowForm(selected?.row ?? 0)}
+		>
+			<PanelsTopLeftIcon /> Row form
+		</Button>
+		<span class="text-muted-foreground">View all fields · ⇧↵</span>
+	</div>
 	<ContextMenu.Root>
 		<ContextMenu.Trigger>
 			{#snippet child({ props })}
@@ -546,6 +608,13 @@
 			{/snippet}
 		</ContextMenu.Trigger>
 		<ContextMenu.Content class="w-56">
+			<ContextMenu.Item
+				disabled={!selected || saving}
+				onSelect={() => selected && openRowForm(selected.row)}
+			>
+				Open row form<ContextMenu.Shortcut>⇧↵</ContextMenu.Shortcut>
+			</ContextMenu.Item>
+			<ContextMenu.Separator />
 			{#if editable}
 				<ContextMenu.Item
 					disabled={!selected || !selectedItem || !canEdit(selectedItem, selected.col)}
@@ -670,6 +739,7 @@
 </div>
 
 <ValueDialog bind:viewing />
+<RowFormDialog bind:viewing={rowViewing} />
 
 <Dialog.Root
 	open={preview !== null}

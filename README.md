@@ -53,6 +53,16 @@ indexes require manual SQL. Type changes rely on PostgreSQL's implicit casts;
 custom conversions need SQL. Default/check expressions reject SQL comments,
 backslashes and dollar quotes.
 
+### Local sample data
+
+The SQL scripts in `dev/` target `public`: run `demo.sql`, optionally
+`demo-performance.sql` for a million orders and three million line items, then
+`demo-erp.sql` for 38 related tables. Feed them to the local container with
+`docker compose exec -T postgres psql -U guckpg -d guckpg < dev/demo.sql`.
+Each seed has a matching `*-check.sql`; `demo-performance-queries.sql` contains
+sample performance queries. `migrate-demo-to-public.sql` moves older demo-schema
+data transactionally and rejects name collisions rather than replacing objects.
+
 Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
 
 ## Creating a project

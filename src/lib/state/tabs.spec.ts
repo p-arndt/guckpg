@@ -33,6 +33,26 @@ describe('Tabs', () => {
 		expect(tabs.active?.title).toBe('ER: audit');
 	});
 
+	it('switches a diagram tab to another schema in place', () => {
+		const tabs = new Tabs();
+		tabs.openDiagram('c1', 'db', 'public');
+		const tab = tabs.active!;
+		expect(tabs.switchDiagramSchema(tab.id, 'demo')).toBe(tab);
+		expect(tabs.items.map((t) => t.title)).toEqual(['ER: demo']);
+		expect(tab.kind === 'diagram' && tab.schema).toBe('demo');
+	});
+
+	it('activates the open diagram tab instead of switching to its schema', () => {
+		const tabs = new Tabs();
+		tabs.openDiagram('c1', 'db', 'demo');
+		const demo = tabs.active!;
+		tabs.openDiagram('c1', 'db', 'public');
+		const pub = tabs.active!;
+		expect(tabs.switchDiagramSchema(pub.id, 'demo')).toBe(demo);
+		expect(tabs.activeId).toBe(demo.id);
+		expect(tabs.items.map((t) => t.title)).toEqual(['ER: demo', 'ER: public']);
+	});
+
 	it('qualifies tables outside public', () => {
 		const tabs = new Tabs();
 		tabs.openTable('c1', 'db', 'audit', 'log');

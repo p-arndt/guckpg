@@ -16,6 +16,8 @@
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import FocusIcon from '@lucide/svelte/icons/focus';
 	import XIcon from '@lucide/svelte/icons/x';
+	import FolderIcon from '@lucide/svelte/icons/folder';
+	import * as Select from '#lib/components/ui/select/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { api, errorMessage, type Diagram } from '#lib/api.js';
 	import {
@@ -189,6 +191,23 @@
 
 	onMount(load);
 
+	let schemas = $state<string[]>([]);
+
+	async function loadSchemas() {
+		try {
+			schemas = await api.listSchemas(tab.connectionId, tab.database);
+		} catch {
+			schemas = [];
+		}
+	}
+
+	function switchSchema(schema: string) {
+		if (!schema || tabs.switchDiagramSchema(tab.id, schema) !== tab) return;
+		focusTable = null;
+		highlighted = null;
+		void load();
+	}
+
 	const tableCount = $derived(diagram?.tables.length ?? 0);
 	const fkCount = $derived(diagram?.foreignKeys.length ?? 0);
 </script>
@@ -267,9 +286,28 @@
 		>
 			{tableCount} tables · {fkCount} foreign keys
 		</span>
-		<span class="ml-auto shrink-0 font-mono text-xs whitespace-nowrap text-muted-foreground"
-			>{tab.database} · {tab.schema}</span
+		<Select.Root
+			type="single"
+			value={tab.schema}
+			onValueChange={switchSchema}
+			onOpenChange={(open) => open && loadSchemas()}
+			disabled={tab.running}
 		>
+			<Select.Trigger
+				size="sm"
+				class="ml-auto h-7 shrink-0 gap-1.5 border-transparent bg-transparent text-[13px] shadow-none hover:bg-hover data-[state=open]:bg-hover dark:bg-transparent dark:hover:bg-hover"
+				aria-label="Schema"
+			>
+				<FolderIcon class="size-3.5 text-muted-foreground" />
+				<span class="text-muted-foreground">{tab.database} /</span>
+				<span class="font-medium">{tab.schema}</span>
+			</Select.Trigger>
+			<Select.Content align="end">
+				{#each schemas.includes(tab.schema) ? schemas : [tab.schema, ...schemas] as schema (schema)}
+					<Select.Item value={schema} label={schema} />
+				{/each}
+			</Select.Content>
+		</Select.Root>
 	</div>
 
 	<div class="relative min-h-0 flex-1">

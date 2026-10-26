@@ -58,7 +58,7 @@ export class TableTab extends TabBase {
 
 export class DiagramTab extends TabBase {
 	readonly kind = 'diagram';
-	readonly schema: string;
+	schema = $state('');
 
 	constructor(connectionId: string, database: string, schema: string) {
 		super(newId(), `ER: ${schema}`, connectionId, database);
@@ -153,6 +153,30 @@ class Tabs {
 		const tab = new DiagramTab(connectionId, database, schema);
 		this.items.push(tab);
 		this.activeId = tab.id;
+	}
+
+	/**
+	 * Point a diagram tab at another schema. When a tab for that schema is already open it
+	 * is activated instead, so there is never more than one per schema. Returns the tab
+	 * that now shows the schema.
+	 */
+	switchDiagramSchema(id: string, schema: string): DiagramTab | undefined {
+		const tab = this.items.find((t): t is DiagramTab => t.id === id && t.kind === 'diagram');
+		if (!tab || tab.schema === schema) return tab;
+		const existing = this.items.find(
+			(t): t is DiagramTab =>
+				t.kind === 'diagram' &&
+				t.connectionId === tab.connectionId &&
+				t.database === tab.database &&
+				t.schema === schema
+		);
+		if (existing) {
+			this.activeId = existing.id;
+			return existing;
+		}
+		tab.schema = schema;
+		tab.title = `ER: ${schema}`;
+		return tab;
 	}
 
 	/** Open a copy of a query tab right after it. */

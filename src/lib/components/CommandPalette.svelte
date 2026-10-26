@@ -127,18 +127,23 @@
 					kind: 'Table',
 					icon: TableIcon,
 					color: connection?.color,
-					run: () => tabs.openTable(target.connectionId, target.database, table.schema, table.name)
+					run: () => {
+						tabs.openTable(target.connectionId, target.database, table.schema, table.name);
+					}
 				});
 			}
-			all.push({
-				key: `diagram:${target.key}`,
-				label: `ER diagram: ${target.database}`,
-				detail: connection?.name,
-				kind: 'Diagram',
-				icon: NetworkIcon,
-				color: connection?.color,
-				run: () => tabs.openDiagram(target.connectionId, target.database, 'public')
-			});
+			const schemas = new Set((tables[target.key] ?? []).map((t) => t.schema));
+			for (const schema of schemas) {
+				all.push({
+					key: `diagram:${target.key}:${schema}`,
+					label: `ER diagram: ${schema}`,
+					detail: multipleTargets ? `${connection?.name} / ${target.database}` : target.database,
+					kind: 'Diagram',
+					icon: NetworkIcon,
+					color: connection?.color,
+					run: () => tabs.openDiagram(target.connectionId, target.database, schema)
+				});
+			}
 		}
 
 		for (const c of connections.list) {

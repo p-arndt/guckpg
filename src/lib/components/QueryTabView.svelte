@@ -3,6 +3,7 @@
 	import ListVideoIcon from '@lucide/svelte/icons/list-video';
 	import SquareIcon from '@lucide/svelte/icons/square';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
+	import ListFilterIcon from '@lucide/svelte/icons/list-filter';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
@@ -12,7 +13,9 @@
 	import { confirmDiscard } from '#lib/state/confirm.svelte.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import type { QueryTab } from '#lib/state/tabs.svelte.js';
+	import { buildSql, emptyModel } from '#lib/query-builder.js';
 	import SqlEditor from './SqlEditor.svelte';
+	import QueryBuilder from './builder/QueryBuilder.svelte';
 	import ResultsPanel from './ResultsPanel.svelte';
 
 	interface Props {
@@ -25,6 +28,32 @@
 	let databases = $state<string[]>([]);
 	let completion = $state<CompletionTable[]>([]);
 	let maxRows = $state('1000');
+	let editorPane = $state<ReturnType<typeof Resizable.Pane> | null>(null);
+	/** Editor height before the builder took more room, restored when it closes. */
+	let sizeBeforeBuilder: number | null = null;
+
+	const builder = $derived(tab.builder?.database === tab.database ? tab.builder.model : null);
+
+	function toggleBuilder() {
+		tab.builderOpen = !tab.builderOpen;
+		if (tab.builderOpen) {
+			if (!builder) tab.builder = { database: tab.database, model: emptyModel() };
+			const size = editorPane?.getSize() ?? 100;
+			// The canvas needs more height than an editor does.
+			if (size < 62) {
+				sizeBeforeBuilder = size;
+				editorPane?.resize(62);
+			}
+		} else if (sizeBeforeBuilder !== null) {
+			editorPane?.resize(sizeBeforeBuilder);
+			sizeBeforeBuilder = null;
+		}
+	}
+
+	// A builder belongs to one database; switching starts a fresh one.
+	$effect(() => {
+		if (tab.builderOpen && !builder) tab.builder = { database: tab.database, model: emptyModel() };
+	});
 
 	const connection = $derived(connections.get(tab.connectionId));
 
@@ -42,14 +71,23 @@
 
 	$effect(() => {
 		const { connectionId, database } = tab;
+		let current = true;
+		completion = [];
 		api.completionTables(connectionId, database).then(
-			(tables) => (completion = tables),
-			() => (completion = [])
+			(tables) => {
+				if (current) completion = tables;
+			},
+			() => {
+				if (current) completion = [];
+			}
 		);
+		return () => {
+			current = false;
+		};
 	});
 
 	/** Last executed text, re-run after saving grid edits. */
-	let lastRun: { text: string; from: number } | null = null;
+	let lastRun: { text: string; from: number; inEditor: boolean } | null = null;
 
 	async function execute(all: boolean) {
 		if (tab.running || !editor) return;
@@ -71,9 +109,21 @@
 		await run(text, from);
 	}
 
-	async function run(text: string, from: number) {
+	async function runBuilt(sql: string) {
+		if (tab.running) return;
+		if (!(await confirmDiscard(tab.dirty))) return;
+		await run(sql, 0, false);
+	}
+
+	function openInEditor(sql: string) {
+		tab.sql = tab.sql.trim() ? `${tab.sql.trimEnd()}\n\n${sql}\n` : `${sql}\n`;
+		toggleBuilder();
+	}
+
+	/** `inEditor` is false for builder SQL, whose error positions do not map onto the editor text. */
+	async function run(text: string, from: number, inEditor = true) {
 		if (!editor) return;
-		lastRun = { text, from };
+		lastRun = { text, from, inEditor };
 		tab.running = true;
 		tab.error = null;
 		tab.ranFrom = from;
@@ -90,7 +140,7 @@
 			tab.output = null;
 			tab.error = isAppError(e) ? e : { kind: 'message', message: errorMessage(e) };
 			if (tab.error.kind === 'postgres' && tab.error.position !== null) {
-				editor.markError(from + tab.error.position - 1);
+				if (inEditor) editor.markError(from + tab.error.position - 1);
 			}
 		} finally {
 			tab.running = false;
@@ -98,7 +148,7 @@
 	}
 
 	function rerun() {
-		if (lastRun) void run(lastRun.text, lastRun.from);
+		if (lastRun) void run(lastRun.text, lastRun.from, lastRun.inEditor);
 	}
 
 	async function cancel() {
@@ -136,6 +186,14 @@
 		</Select.Root>
 
 		<div class="ml-auto flex items-center gap-1.5">
+			<Button
+				size="sm"
+				variant={tab.builderOpen ? 'secondary' : 'ghost'}
+				aria-pressed={tab.builderOpen}
+				onclick={toggleBuilder}
+			>
+				<ListFilterIcon /> Query builder
+			</Button>
 			{#if tab.running}
 				<Button size="sm" variant="ghost" class="text-bad" onclick={cancel}>
 					<SquareIcon /> Stop
@@ -148,7 +206,7 @@
 							{...props}
 							size="sm"
 							variant="ghost"
-							disabled={tab.running}
+							disabled={tab.running || tab.builderOpen}
 							onclick={() => execute(true)}
 						>
 							<ListVideoIcon /> Run all
@@ -165,7 +223,12 @@
 							size="sm"
 							class="pr-1.5"
 							disabled={tab.running}
-							onclick={() => execute(false)}
+							onclick={() => {
+								if (tab.builderOpen && builder) {
+									const { sql } = buildSql(builder);
+									if (sql) void runBuilt(sql);
+								} else void execute(false);
+							}}
 						>
 							<PlayIcon class="fill-current" /> Run
 							<kbd
@@ -175,20 +238,37 @@
 						</Button>
 					{/snippet}
 				</Tooltip.Trigger>
-				<Tooltip.Content>Run the selection or the statement at the cursor</Tooltip.Content>
+				<Tooltip.Content
+					>{tab.builderOpen
+						? 'Run the built query'
+						: 'Run the selection or the statement at the cursor'}</Tooltip.Content
+				>
 			</Tooltip.Root>
 		</div>
 	</div>
 
 	<Resizable.PaneGroup direction="vertical" autoSaveId="guckpg.query" class="min-h-0 flex-1">
-		<Resizable.Pane defaultSize={45} minSize={10}>
-			<SqlEditor
-				bind:this={editor}
-				bind:value={tab.sql}
-				{completion}
-				onRun={() => execute(false)}
-				onRunAll={() => execute(true)}
-			/>
+		<Resizable.Pane bind:this={editorPane} defaultSize={45} minSize={10}>
+			<div class="h-full" class:hidden={tab.builderOpen}>
+				<SqlEditor
+					bind:this={editor}
+					bind:value={tab.sql}
+					{completion}
+					onRun={() => execute(false)}
+					onRunAll={() => execute(true)}
+				/>
+			</div>
+			{#if tab.builderOpen && builder}
+				<QueryBuilder
+					model={builder}
+					connectionId={tab.connectionId}
+					database={tab.database}
+					tables={completion}
+					running={tab.running}
+					onrun={runBuilt}
+					onopen={openInEditor}
+				/>
+			{/if}
 		</Resizable.Pane>
 		<Resizable.Handle />
 		<Resizable.Pane defaultSize={55} minSize={10}>

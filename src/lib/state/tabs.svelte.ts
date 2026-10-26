@@ -1,5 +1,6 @@
 import { api, type AppError, type Column, type QueryOutput } from '#lib/api.js';
 import { confirmDiscard } from './confirm.svelte.js';
+import type { BuilderModel } from '#lib/query-builder.js';
 
 type Sort = { column: string; dir: 'asc' | 'desc' } | null;
 
@@ -32,6 +33,9 @@ export class QueryTab extends TabBase {
 	sql = $state('');
 	/** Offset in `sql` where the last executed text started, to map error positions. */
 	ranFrom = $state(0);
+	builderOpen = $state(false);
+	/** Kept while the tab lives so closing the builder does not lose the canvas. */
+	builder = $state<{ database: string; model: BuilderModel } | null>(null);
 
 	constructor(id: string, title: string, connectionId: string, database: string, sql: string) {
 		super(id, title, connectionId, database);

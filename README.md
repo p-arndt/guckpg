@@ -17,6 +17,14 @@ notarized, so operating systems may warn when opening them.
 
 ## Database objects
 
+In a query tab, select **Query builder** to construct a SELECT visually. Click or
+drag tables onto the canvas; tables that share a foreign key join automatically,
+and dragging a column onto a column of another table adds a join. Tick columns to
+select them, then set aggregates, aliases, conditions, sorting and a limit in the
+side panel while the SQL updates live. **Run** (⌘↵) runs it into the results
+below, **Edit SQL** appends it to the editor. Changing databases starts a new
+builder.
+
 Use **Row form** above any result grid, the row context menu, or **Shift+Enter**
 to open all fields of a row in a large form. Previous/Next navigates the loaded
 rows in their displayed order. Applying or navigating stages edits in the grid;

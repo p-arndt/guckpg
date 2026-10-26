@@ -23,6 +23,10 @@
 	import TableTabView from '#lib/components/TableTabView.svelte';
 	import ErDiagramView from '#lib/components/er/ErDiagramView.svelte';
 	import RoleTabView from '#lib/components/RoleTabView.svelte';
+	import BackdropArt from '#lib/components/BackdropArt.svelte';
+	import { appearance } from '#lib/state/appearance.svelte.js';
+
+	$effect(() => appearance.apply(document.documentElement));
 
 	let aiOpen = $state(false);
 	let aiPane = $state<ReturnType<typeof Resizable.Pane> | null>(null);
@@ -141,7 +145,22 @@
 
 <svelte:window onkeydown={onKeydown} oncontextmenu={onContextMenu} />
 
-<div class="flex h-screen w-screen flex-col overflow-hidden bg-chrome">
+<div class="relative isolate flex h-screen w-screen flex-col overflow-hidden bg-chrome">
+	{#if appearance.background !== 'none'}
+		<!-- The art twice: crisp behind the title bar and sidebar, and huge and blurred behind the
+		     whole window, so its light runs on under the panels instead of stopping at an edge. -->
+		<div class="backdrop pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+			<BackdropArt
+				variant={appearance.background}
+				class="ambient-art absolute top-0 left-0 h-[640px] w-[1100px]"
+			/>
+			<div class="ambient-glow absolute -right-16 -bottom-52 h-[600px] w-[900px]"></div>
+			<BackdropArt
+				variant={appearance.background}
+				class="header-art absolute top-0 left-0 h-[440px] max-h-[65%] w-[560px]"
+			/>
+		</div>
+	{/if}
 	<TopBar
 		onNewQuery={newQuery}
 		onOpenPalette={() => (paletteOpen = true)}
@@ -166,7 +185,7 @@
 				order={2}
 				defaultSize={80}
 				minSize={30}
-				class="flex min-w-0 flex-col rounded-xl border bg-background shadow-panel"
+				class="glass-card flex min-w-0 flex-col rounded-xl border bg-background shadow-panel"
 			>
 				{#if tabs.items.length}
 					<TabBar onNewQuery={newQuery} />

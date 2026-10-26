@@ -673,7 +673,7 @@
 	</div>
 	{#if settingsOpen}
 		<form
-			class="mx-2 mb-2 flex min-h-0 flex-1 flex-col rounded-xl border bg-background shadow-panel"
+			class="glass-card mx-2 mb-2 flex min-h-0 flex-1 flex-col rounded-xl border bg-background shadow-panel"
 			onsubmit={(e) => {
 				e.preventDefault();
 				void saveSettings();
@@ -938,7 +938,7 @@
 			{/if}
 		</div>
 		<div
-			class="relative mx-2 flex min-h-0 flex-1 flex-col rounded-xl border bg-background shadow-panel"
+			class="glass-card relative mx-2 flex min-h-0 flex-1 flex-col rounded-xl border bg-background shadow-panel"
 		>
 			<div
 				bind:this={log}

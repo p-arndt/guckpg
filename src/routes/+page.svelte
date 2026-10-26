@@ -10,6 +10,7 @@
 	import { errorMessage, type ConnectionConfig } from '#lib/api.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { tabs } from '#lib/state/tabs.svelte.js';
+	import { allowNativeContextMenu } from '#lib/context-menu.js';
 	import Sidebar from '#lib/components/Sidebar.svelte';
 	import CommandPalette from '#lib/components/CommandPalette.svelte';
 	import PromptDialog from '#lib/components/PromptDialog.svelte';
@@ -79,6 +80,19 @@
 		else toast.info('Connect to a database first');
 	}
 
+	function onContextMenu(e: MouseEvent) {
+		const target = e.target instanceof Element ? e.target : null;
+		const hasSelection = !!window.getSelection()?.toString();
+		if (
+			!allowNativeContextMenu(target, {
+				hasSelection,
+				shiftKey: e.shiftKey,
+				dev: import.meta.env.DEV
+			})
+		)
+			e.preventDefault();
+	}
+
 	function onKeydown(e: KeyboardEvent) {
 		// Ctrl+Tab works on every platform, like in browsers.
 		if (e.ctrlKey && e.key === 'Tab') {
@@ -115,7 +129,7 @@
 	}
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} oncontextmenu={onContextMenu} />
 
 <div class="flex h-screen w-screen flex-col overflow-hidden">
 	<TopBar

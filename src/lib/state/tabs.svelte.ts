@@ -42,7 +42,10 @@ export class QueryTab extends TabBase {
 export class TableTab extends TabBase {
 	readonly kind = 'table';
 	readonly schema: string;
-	readonly table: string;
+	table = $state('');
+	view = $state<'data' | 'structure'>('data');
+	requestedView = $state<'data' | 'structure' | null>(null);
+	structureBusy = $state(false);
 	sort = $state<Sort>(null);
 	limit = $state(200);
 	offset = $state(0);
@@ -131,11 +134,12 @@ class Tabs {
 		);
 		if (existing) {
 			this.activeId = existing.id;
-			return;
+			return existing as TableTab;
 		}
 		const tab = new TableTab(connectionId, database, schema, table);
 		this.items.push(tab);
 		this.activeId = tab.id;
+		return tab;
 	}
 
 	openDiagram(connectionId: string, database: string, schema: string) {
@@ -255,6 +259,7 @@ class Tabs {
 	/** Close unless the user keeps unsaved edits. */
 	async requestClose(id: string) {
 		const tab = this.items.find((t) => t.id === id);
+		if (tab?.kind === 'table' && tab.structureBusy) return;
 		if (tab && !(await confirmDiscard(tab.dirty))) return;
 		this.close(id);
 	}
@@ -262,6 +267,7 @@ class Tabs {
 	/** Close several tabs, asking once if any of them has unsaved edits. */
 	async requestCloseMany(ids: string[]) {
 		const closing = this.items.filter((t) => ids.includes(t.id));
+		if (closing.some((t) => t.kind === 'table' && t.structureBusy)) return;
 		const dirty = closing.reduce((sum, t) => sum + t.dirty, 0);
 		if (!(await confirmDiscard(dirty))) return;
 		for (const t of closing) this.close(t.id);

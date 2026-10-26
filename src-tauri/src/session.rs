@@ -102,7 +102,7 @@ impl Manager {
         Ok(Transport::Tunnel(tunnel))
     }
 
-    async fn open(&self, connection_id: &str, database: &str) -> AppResult<PgConn> {
+    pub(crate) async fn open(&self, connection_id: &str, database: &str) -> AppResult<PgConn> {
         let cfg = self.store.get(connection_id)?;
         let secrets = resolve_secrets(&cfg.id, &Secrets::default())?;
         let transport = self.transport(&cfg, &secrets).await?;

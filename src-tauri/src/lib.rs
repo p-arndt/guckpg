@@ -9,6 +9,7 @@ mod pg;
 mod session;
 mod sql;
 mod ssh;
+mod structure;
 
 use tauri::Manager as _;
 
@@ -44,6 +45,10 @@ pub fn run() {
             commands::list_databases,
             commands::list_schemas,
             commands::list_relations,
+            commands::list_objects,
+            commands::object_definition,
+            commands::relation_definition,
+            commands::refresh_materialized_view,
             commands::list_columns,
             commands::schema_diagram,
             commands::completion_tables,
@@ -53,6 +58,9 @@ pub fn run() {
             commands::preview_changes,
             commands::cancel_query,
             commands::close_tab,
+            structure::table_structure,
+            structure::preview_structure,
+            structure::apply_structure,
         ])
         .run(tauri::generate_context!())
         .expect("error while running guckpg");

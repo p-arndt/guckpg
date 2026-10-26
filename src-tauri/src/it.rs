@@ -155,6 +155,179 @@ async fn browses_catalog() {
     assert!(!catalog::databases(&conn.client).await.unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn browses_object_definitions_and_refreshes_materialized_views() {
+    let Some(conn) = direct().await else { return };
+    conn.run(
+        r#"DROP SCHEMA IF EXISTS "it objects" CASCADE;
+           CREATE SCHEMA "it objects";
+           SET search_path TO "it objects", pg_catalog;
+           CREATE TABLE "source table" (id integer);
+           INSERT INTO "source table" VALUES (1);
+           CREATE TABLE other_table (id integer);
+           CREATE VIEW "View Name" WITH (security_barrier = true, check_option = local)
+               AS SELECT id FROM "source table";
+           CREATE MATERIALIZED VIEW "Materialized View" AS SELECT id FROM "source table";
+           CREATE FUNCTION overloaded(value integer) RETURNS integer LANGUAGE SQL AS 'SELECT value';
+           CREATE FUNCTION overloaded(value text) RETURNS text LANGUAGE SQL AS 'SELECT value';
+           CREATE PROCEDURE do_nothing() LANGUAGE SQL AS 'SELECT 1';
+           CREATE FUNCTION on_change() RETURNS trigger LANGUAGE plpgsql AS
+               'BEGIN RETURN NEW; END';
+           CREATE TRIGGER same_name BEFORE INSERT ON "source table"
+               FOR EACH ROW EXECUTE FUNCTION on_change();
+           CREATE TRIGGER same_name BEFORE INSERT ON other_table
+               FOR EACH ROW EXECUTE FUNCTION on_change();
+           CREATE SEQUENCE "Sequence Name" AS integer INCREMENT BY 3 MINVALUE 2
+               MAXVALUE 500 START WITH 8 CACHE 4 CYCLE;
+           CREATE AGGREGATE summed(integer) (SFUNC = int4pl, STYPE = integer, INITCOND = '0');"#,
+        10,
+    )
+    .await
+    .unwrap();
+
+    let objects = catalog::objects(&conn.client, "it objects").await.unwrap();
+    let overloaded: Vec<_> = objects.iter().filter(|o| o.name == "overloaded").collect();
+    assert_eq!(overloaded.len(), 2);
+    assert_ne!(overloaded[0].oid, overloaded[1].oid);
+    assert_ne!(overloaded[0].identity, overloaded[1].identity);
+    assert!(overloaded.iter().all(|o| o.kind == "function"));
+    assert!(!objects.iter().any(|o| o.name == "summed"));
+    let triggers: Vec<_> = objects.iter().filter(|o| o.kind == "trigger").collect();
+    assert_eq!(triggers.len(), 2);
+    assert_ne!(triggers[0].identity, triggers[1].identity);
+    assert!(triggers.iter().any(|o| o.identity.contains("source table")));
+
+    for object in &objects {
+        let sql = catalog::object_definition(&conn.client, "it objects", object.kind, object.oid)
+            .await
+            .unwrap();
+        assert!(sql.contains("SET search_path TO \"it objects\", \"pg_catalog\";"));
+        assert!(sql.ends_with(";\n"));
+        match object.kind {
+            "function" => assert!(sql.contains("CREATE OR REPLACE FUNCTION")),
+            "procedure" => assert!(sql.contains("CREATE OR REPLACE PROCEDURE")),
+            "trigger" => {
+                assert!(sql.contains("CREATE TRIGGER same_name"));
+                assert!(sql.contains("ON \"it objects\"."));
+            }
+            "sequence" => {
+                assert!(
+                    sql.contains("CREATE SEQUENCE \"it objects\".\"Sequence Name\" AS integer")
+                );
+                for option in [
+                    "INCREMENT BY 3",
+                    "MINVALUE 2",
+                    "MAXVALUE 500",
+                    "START WITH 8",
+                    "CACHE 4",
+                    "CYCLE",
+                ] {
+                    assert!(sql.contains(option), "missing {option}: {sql}");
+                }
+                assert!(!sql.contains("RESTART"));
+                conn.run("SELECT nextval('\"it objects\".\"Sequence Name\"')", 10)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    catalog::object_definition(&conn.client, "it objects", "sequence", object.oid)
+                        .await
+                        .unwrap(),
+                    sql
+                );
+            }
+            kind => panic!("unexpected object kind {kind}"),
+        }
+    }
+
+    let function_oid = overloaded[0].oid;
+    for (schema, kind, oid) in [
+        ("public", "function", function_oid),
+        ("it objects", "procedure", function_oid),
+        ("it objects", "table", function_oid),
+        ("it objects", "function", 0),
+    ] {
+        assert!(
+            catalog::object_definition(&conn.client, schema, kind, oid)
+                .await
+                .is_err()
+        );
+    }
+
+    let view = catalog::relation_definition(&conn.client, "it objects", "View Name")
+        .await
+        .unwrap();
+    assert!(view.contains("CREATE OR REPLACE VIEW \"it objects\".\"View Name\""));
+    assert!(view.contains("security_barrier = 'true'"));
+    assert!(view.contains("check_option = 'local'"));
+    let path = conn.run("SHOW search_path", 10).await.unwrap();
+    assert_eq!(
+        path.results[0].rows[0][0].as_deref(),
+        Some("\"it objects\", pg_catalog")
+    );
+    conn.run(&view, 10).await.unwrap();
+    let options = conn
+        .run(
+            "SELECT reloptions::text FROM pg_catalog.pg_class
+         WHERE oid = '\"it objects\".\"View Name\"'::regclass",
+            10,
+        )
+        .await
+        .unwrap();
+    let options = options.results[0].rows[0][0].as_deref().unwrap();
+    assert!(options.contains("security_barrier=true"));
+    assert!(options.contains("check_option=local"));
+    let materialized =
+        catalog::relation_definition(&conn.client, "it objects", "Materialized View")
+            .await
+            .unwrap();
+    assert!(materialized.contains("CREATE MATERIALIZED VIEW \"it objects\".\"Materialized View\""));
+    assert!(!materialized.contains("DROP"));
+    assert!(!materialized.contains("OR REPLACE"));
+    assert!(
+        catalog::relation_definition(&conn.client, "it objects", "source table")
+            .await
+            .is_err()
+    );
+    for name in [
+        "View Name",
+        "source table",
+        "does not exist",
+        "Materialized View\"; DROP SCHEMA public; --",
+    ] {
+        assert!(
+            catalog::refresh_materialized_view(&conn.client, "it objects", name)
+                .await
+                .is_err()
+        );
+    }
+    conn.run("INSERT INTO \"it objects\".\"source table\" VALUES (2)", 10)
+        .await
+        .unwrap();
+    catalog::refresh_materialized_view(&conn.client, "it objects", "Materialized View")
+        .await
+        .unwrap();
+    let rows = conn
+        .run(
+            "SELECT id FROM \"it objects\".\"Materialized View\" ORDER BY id",
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.results[0].rows,
+        vec![vec![Some("1".into())], vec![Some("2".into())]]
+    );
+    conn.run("BEGIN READ ONLY", 10).await.unwrap();
+    let err = catalog::refresh_materialized_view(&conn.client, "it objects", "Materialized View")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::Postgres { code: Some(ref code), .. } if code == "25006"));
+    conn.run("ROLLBACK", 10).await.unwrap();
+    conn.run("DROP SCHEMA \"it objects\" CASCADE", 10)
+        .await
+        .unwrap();
+}
+
 /// SSH server plus the Postgres host name as the SSH server sees it.
 fn ssh_target() -> Option<(SshConfig, String, String)> {
     Some((

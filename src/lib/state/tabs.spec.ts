@@ -6,6 +6,21 @@ const { Tabs } = await import('./tabs.svelte');
 const { memoryStorage } = await import('./test-storage');
 
 describe('Tabs', () => {
+	it('keeps an applying table designer open and reuses its renamed table tab', async () => {
+		const tabs = new Tabs();
+		const table = tabs.openTable('c1', 'db', 'public', 'items');
+		table.view = 'structure';
+		table.structureBusy = true;
+		await tabs.requestClose(table.id);
+		await tabs.requestCloseMany([table.id]);
+		expect(tabs.items).toHaveLength(1);
+		table.table = 'renamed_items';
+		expect(tabs.openTable('c1', 'db', 'public', 'renamed_items')).toBe(table);
+		expect(table.view).toBe('structure');
+		table.structureBusy = false;
+		await tabs.requestClose(table.id);
+		expect(tabs.items).toHaveLength(0);
+	});
 	it('opens query tabs with increasing titles and activates them', () => {
 		const tabs = new Tabs();
 		tabs.openQuery('c1', 'db');

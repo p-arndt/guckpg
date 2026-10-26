@@ -13,6 +13,39 @@ and Intel on macOS 26. GitHub creates a draft release with the stamp notes; revi
 the completed builds before publishing it. The builds are not code signed or
 notarized, so operating systems may warn when opening them.
 
+## Database objects
+
+Expand a schema to browse tables, views, materialized views, functions,
+procedures, triggers and sequences. Routine signatures distinguish overloads;
+trigger labels include their table.
+
+Use **Open definition** on a view or materialized view, or open a routine,
+trigger or sequence, to inspect its SQL in a new query tab. Nothing executes
+until you run it. Materialized views and sequences use creation scripts rather
+than replacement scripts; review the generated notes before editing an existing
+object. These definitions are not a full schema backup.
+
+**Refresh materialized view** rebuilds stored results and can block readers
+while it runs. This action is unavailable for read-only connections.
+
+### Table designer
+
+Open a table and select **Structure**, or choose **Design table** from its
+context menu. **New table…** in the schema menu opens the same designer for a
+new table. Edit columns, types, nullability, defaults, identity, comments,
+primary/foreign/unique/check constraints, and ordinary indexes with the forms.
+Changes stay pending until **Preview SQL** followed by **Apply**. Dropping or
+altering existing objects requires confirmation. Switching tabs preserves the
+draft; closing a dirty tab asks before discarding it.
+
+Changes run in one transaction, with a two-second lock timeout and a fresh
+structure comparison to reject stale drafts. No automatic `CASCADE` is used.
+Read-only connections and unsupported structures remain inspectable. Partitioned
+or inherited tables, generated-column editing, advanced constraints and complex
+indexes require manual SQL. Type changes rely on PostgreSQL's implicit casts;
+custom conversions need SQL. Default/check expressions reject SQL comments,
+backslashes and dollar quotes.
+
 Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
 
 ## Creating a project

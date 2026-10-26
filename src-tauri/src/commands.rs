@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tauri::State;
 
-use crate::catalog::{self, Column, CompletionTable, Diagram, Relation};
+use crate::catalog::{self, Column, CompletionTable, Diagram, Relation, SchemaObject};
 use crate::config::{self, ConnectionConfig, Placement, Secrets};
 use crate::editing;
 use crate::error::{AppError, AppResult};
@@ -154,6 +154,57 @@ pub async fn list_relations(
 ) -> AppResult<Vec<Relation>> {
     let conn = manager.meta(&id, &database).await?;
     catalog::relations(&conn.client, &schema).await
+}
+
+#[tauri::command]
+pub async fn list_objects(
+    manager: State<'_, Manager>,
+    id: String,
+    database: String,
+    schema: String,
+) -> AppResult<Vec<SchemaObject>> {
+    let conn = manager.meta(&id, &database).await?;
+    catalog::objects(&conn.client, &schema).await
+}
+
+#[tauri::command]
+pub async fn object_definition(
+    manager: State<'_, Manager>,
+    id: String,
+    database: String,
+    schema: String,
+    kind: String,
+    oid: u32,
+) -> AppResult<String> {
+    let conn = manager.meta(&id, &database).await?;
+    catalog::object_definition(&conn.client, &schema, &kind, oid).await
+}
+
+#[tauri::command]
+pub async fn relation_definition(
+    manager: State<'_, Manager>,
+    id: String,
+    database: String,
+    schema: String,
+    name: String,
+) -> AppResult<String> {
+    let conn = manager.meta(&id, &database).await?;
+    catalog::relation_definition(&conn.client, &schema, &name).await
+}
+
+#[tauri::command]
+pub async fn refresh_materialized_view(
+    manager: State<'_, Manager>,
+    id: String,
+    database: String,
+    schema: String,
+    name: String,
+) -> AppResult<()> {
+    if manager.store.get(&id)?.read_only {
+        return Err(AppError::msg("This connection is read-only"));
+    }
+    let conn = manager.meta(&id, &database).await?;
+    catalog::refresh_materialized_view(&conn.client, &schema, &name).await
 }
 
 #[tauri::command]

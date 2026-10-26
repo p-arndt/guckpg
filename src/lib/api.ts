@@ -59,6 +59,13 @@ export interface Relation {
 	estimatedRows: number | null;
 }
 
+export interface SchemaObject {
+	oid: number;
+	name: string;
+	kind: 'function' | 'procedure' | 'trigger' | 'sequence';
+	identity: string;
+}
+
 export interface Column {
 	name: string;
 	dataType: string;
@@ -179,7 +186,7 @@ export function errorMessage(e: unknown): string {
  * Every command may open an SSH tunnel. When the server's key is unknown, ask
  * the user, store the key if they trust it, and retry the command once.
  */
-async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
 	try {
 		return await tauriInvoke<T>(cmd, args);
 	} catch (e) {
@@ -210,6 +217,19 @@ export const api = {
 		invoke<string[]>('list_schemas', { id, database, includeSystem }),
 	listRelations: (id: string, database: string, schema: string) =>
 		invoke<Relation[]>('list_relations', { id, database, schema }),
+	listObjects: (id: string, database: string, schema: string) =>
+		invoke<SchemaObject[]>('list_objects', { id, database, schema }),
+	objectDefinition: (
+		id: string,
+		database: string,
+		schema: string,
+		kind: SchemaObject['kind'],
+		oid: number
+	) => invoke<string>('object_definition', { id, database, schema, kind, oid }),
+	relationDefinition: (id: string, database: string, schema: string, name: string) =>
+		invoke<string>('relation_definition', { id, database, schema, name }),
+	refreshMaterializedView: (id: string, database: string, schema: string, name: string) =>
+		invoke<void>('refresh_materialized_view', { id, database, schema, name }),
 	listColumns: (id: string, database: string, schema: string, table: string) =>
 		invoke<Column[]>('list_columns', { id, database, schema, table }),
 	schemaDiagram: (id: string, database: string, schema: string) =>

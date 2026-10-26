@@ -64,9 +64,7 @@ pub async fn import_csv(
     table: String,
     csv: String,
 ) -> AppResult<u64> {
-    if manager.store.get(&id)?.read_only {
-        return Err(AppError::msg("This connection is read-only."));
-    }
+    manager.ensure_writable(&id)?;
     if csv.len() > MAX_BYTES {
         return Err(AppError::msg("CSV file exceeds the 16 MiB limit."));
     }

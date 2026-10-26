@@ -1,44 +1,25 @@
 //! Integration tests against a real Postgres (and SSH server for the tunnel
-//! tests), started by `compose.yaml`. They skip themselves unless the env
-//! vars are set; `just test-it` sets them.
+//! tests), started by `compose.yaml`. Without the env vars they skip with a
+//! notice, or fail when `GUCKPG_REQUIRE_DB=1`; `just test-it` sets them.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::catalog;
-use crate::config::{ConnectionConfig, ResolvedSecrets, SshAuth, SshConfig, SslMode};
+use crate::config::{ConnectionConfig, ResolvedSecrets, SshAuth, SshConfig};
 use crate::editing;
 use crate::error::AppError;
 use crate::pg::{PgConn, Transport};
-use crate::sql::{Change, ColumnValue};
+use crate::sql::{Change, ColumnValue, RowOrder};
 use crate::ssh::{KnownHosts, Tunnel};
-
-fn env(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|v| !v.is_empty())
-}
+use crate::testutil::{env, skip_or_fail, test_db};
 
 fn pg_target() -> Option<(ConnectionConfig, String)> {
-    let config = ConnectionConfig {
-        id: "it".into(),
-        name: "it".into(),
-        host: env("POSTGRES_HOST")?,
-        port: env("POSTGRES_PORT")?.parse().ok()?,
-        user: env("POSTGRES_USER")?,
-        database: env("POSTGRES_DB")?,
-        ssl_mode: SslMode::Prefer,
-        read_only: false,
-        color: None,
-        ssh: None,
-        folder: None,
-    };
-    Some((config, env("POSTGRES_PASSWORD")?))
+    test_db("it")
 }
 
 async fn direct() -> Option<PgConn> {
-    let Some((cfg, pw)) = pg_target() else {
-        eprintln!("skipped: POSTGRES_* not set");
-        return None;
-    };
+    let (cfg, pw) = pg_target()?;
     Some(
         PgConn::connect(&cfg, &cfg.database, Some(&pw), Transport::Direct)
             .await
@@ -330,22 +311,30 @@ async fn browses_object_definitions_and_refreshes_materialized_views() {
 
 /// SSH server plus the Postgres host name as the SSH server sees it.
 fn ssh_target() -> Option<(SshConfig, String, String)> {
-    Some((
-        SshConfig {
-            host: env("SSH_HOST")?,
-            port: env("SSH_PORT")?.parse().ok()?,
-            user: env("SSH_USER")?,
-            auth: SshAuth::Password,
-        },
-        env("SSH_PASSWORD")?,
-        env("SSH_PG_HOST")?,
-    ))
+    let target = (|| {
+        Some((
+            SshConfig {
+                host: env("SSH_HOST")?,
+                port: env("SSH_PORT")?.parse().ok()?,
+                user: env("SSH_USER")?,
+                auth: SshAuth::Password,
+            },
+            env("SSH_PASSWORD")?,
+            env("SSH_PG_HOST")?,
+        ))
+    })();
+    if target.is_none() {
+        skip_or_fail("SSH_HOST/PORT/USER/PASSWORD/PG_HOST");
+    }
+    target
 }
 
 #[tokio::test]
 async fn tunnels_through_ssh() {
-    let (Some((ssh, ssh_pw, pg_host)), Some((mut cfg, pg_pw))) = (ssh_target(), pg_target()) else {
-        eprintln!("skipped: SSH_* or POSTGRES_* not set");
+    let Some((ssh, ssh_pw, pg_host)) = ssh_target() else {
+        return;
+    };
+    let Some((mut cfg, pg_pw)) = pg_target() else {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
@@ -522,22 +511,22 @@ async fn detects_editable_results() {
     );
     assert_eq!(info.key, vec![3, 1]);
 
-    // Names stay aligned with the result even when a column repeats.
-    let info = editing::source_info(&conn.client, "SELECT id, 1, tenant, id FROM it_edit_src")
+    // Names stay aligned with the result around expressions.
+    let info = editing::source_info(&conn.client, "SELECT id, 1, tenant FROM it_edit_src")
         .await
         .expect("editable");
     assert_eq!(
         info.columns,
-        vec![
-            Some("id".into()),
-            None,
-            Some("tenant".into()),
-            Some("id".into())
-        ]
+        vec![Some("id".into()), None, Some("tenant".into())]
     );
     assert_eq!(info.key, vec![2, 0]);
 
     for sql in [
+        // A repeated column would be assigned twice by one edit.
+        "SELECT id, 1, tenant, id FROM it_edit_src",
+        // Self-joins mix columns of different table rows in one result row.
+        "SELECT a.tenant, a.id, b.name FROM it_edit_src a JOIN it_edit_src b ON b.id = a.id + 1",
+        "SELECT a.tenant, a.id, b.tenant, b.id FROM it_edit_src a, it_edit_src b",
         "SELECT name FROM it_edit_src",
         "SELECT s.id, s.tenant, o.id FROM it_edit_src s, it_edit_other o",
         "SELECT * FROM it_edit_nopk",
@@ -637,6 +626,74 @@ async fn applies_changes_in_one_transaction() {
         .is_err()
     );
     conn.run("SELECT 1", 10).await.unwrap();
+
+    // A row locked by an open editor transaction fails the save quickly
+    // instead of hanging, and leaves nothing behind.
+    let Some(locker) = direct().await else { return };
+    locker
+        .client
+        .batch_execute("BEGIN; SELECT * FROM it_apply WHERE id = 3 FOR UPDATE")
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let err = editing::apply(
+        &conn.client,
+        "public",
+        "it_apply",
+        &[Change::Update {
+            key: vec![cv("id", Some("3"))],
+            values: vec![cv("name", Some("locked"))],
+        }],
+    )
+    .await
+    .unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(10), "{err}");
+    locker.client.batch_execute("ROLLBACK").await.unwrap();
+    let out = conn
+        .run("SELECT name FROM it_apply WHERE id = 3", 10)
+        .await
+        .unwrap();
+    assert_eq!(out.results[0].rows[0][0].as_deref(), Some("c"));
+}
+
+#[tokio::test]
+async fn browse_pages_follow_the_primary_key() {
+    let Some(conn) = direct().await else { return };
+    conn.run(
+        "DROP TABLE IF EXISTS it_browse_pk, it_browse_heap;
+         DROP VIEW IF EXISTS it_browse_view;
+         CREATE TABLE it_browse_pk (a int, b int, PRIMARY KEY (b, a));
+         CREATE TABLE it_browse_heap (a int);
+         CREATE VIEW it_browse_view AS SELECT 1 AS x;",
+        10,
+    )
+    .await
+    .unwrap();
+    let c = &conn.client;
+    assert_eq!(
+        editing::row_order(c, "public", "it_browse_pk")
+            .await
+            .unwrap(),
+        RowOrder::Key(vec!["b".into(), "a".into()])
+    );
+    assert_eq!(
+        editing::row_order(c, "public", "it_browse_heap")
+            .await
+            .unwrap(),
+        RowOrder::Physical
+    );
+    assert_eq!(
+        editing::row_order(c, "public", "it_browse_view")
+            .await
+            .unwrap(),
+        RowOrder::Unknown
+    );
+    assert_eq!(
+        editing::row_order(c, "public", "it_browse_missing")
+            .await
+            .unwrap(),
+        RowOrder::Unknown
+    );
 }
 
 #[tokio::test]
@@ -705,7 +762,9 @@ async fn inspects_and_edits_roles() {
         postgres_protocol::password::scram_sha_256(p.as_bytes())
     })
     .unwrap();
-    crate::roles::apply(c, &statements).await.unwrap();
+    crate::roles::apply_verified(c, &statements, &changes)
+        .await
+        .unwrap();
 
     let details =
         serde_json::to_value(crate::roles::details(c, "it_role_web").await.unwrap()).unwrap();
@@ -736,12 +795,69 @@ async fn inspects_and_edits_roles() {
     }))
     .unwrap();
     let statements = crate::roles::plan(&failing, |p| p.into()).unwrap();
-    assert!(crate::roles::apply(c, &statements).await.is_err());
+    assert!(
+        crate::roles::apply_verified(c, &statements, &failing)
+            .await
+            .is_err()
+    );
     let details =
         serde_json::to_value(crate::roles::details(c, "it_role_web").await.unwrap()).unwrap();
     assert_eq!(details["createDb"], true);
 
     c.batch_execute("DROP TABLE it_role_t; DROP ROLE it_role_web, it_role_readers;")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn refuses_revokes_that_another_grantor_would_keep() {
+    let Some(conn) = direct().await else { return };
+    let c = &conn.client;
+    c.batch_execute(
+        "DROP TABLE IF EXISTS it_revoke_t; DROP ROLE IF EXISTS it_revoke_grantor, it_revoke_target;
+         CREATE ROLE it_revoke_grantor NOLOGIN;
+         CREATE ROLE it_revoke_target NOLOGIN;
+         CREATE TABLE it_revoke_t (id int);
+         GRANT SELECT ON it_revoke_t TO it_revoke_grantor WITH GRANT OPTION;
+         SET ROLE it_revoke_grantor;
+         GRANT SELECT ON it_revoke_t TO it_revoke_target;
+         RESET ROLE;",
+    )
+    .await
+    .unwrap();
+
+    let changes = serde_json::from_value(serde_json::json!({
+        "name": "it_revoke_target",
+        "comment": "must be rolled back",
+        "privileges": [
+            { "target": { "kind": "table", "schema": "public", "name": "it_revoke_t" }, "privilege": "SELECT", "grant": false },
+        ],
+    }))
+    .unwrap();
+    let statements = crate::roles::plan(&changes, |p| p.into()).unwrap();
+    let err = crate::roles::apply_verified(c, &statements, &changes)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("SELECT (granted by \"it_revoke_grantor\")"),
+        "{err}"
+    );
+
+    let details =
+        serde_json::to_value(crate::roles::details(c, "it_revoke_target").await.unwrap()).unwrap();
+    assert_eq!(details["comment"], serde_json::Value::Null);
+    let still_granted: bool = c
+        .query_one(
+            "SELECT has_table_privilege('it_revoke_target', 'public.it_revoke_t', 'SELECT')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(still_granted);
+
+    c.batch_execute("DROP TABLE it_revoke_t; DROP ROLE it_revoke_target, it_revoke_grantor;")
         .await
         .unwrap();
 }

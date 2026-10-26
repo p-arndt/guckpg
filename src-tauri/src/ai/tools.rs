@@ -1,5 +1,7 @@
 //! Database inspection, structured reads, and user-approved write proposals.
 
+use std::str::FromStr;
+
 use serde_json::{Value, json};
 use tokio_postgres::types::Type;
 
@@ -11,31 +13,129 @@ const MAX_ITEMS: usize = 100;
 const MAX_CELL_BYTES: usize = 1024;
 const SAMPLE_ROWS: usize = 20;
 const SAMPLE_COLUMNS: usize = 64;
+const MAX_SQL_BYTES: usize = 16_384;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    ListSchemas,
+    ListTables,
+    DescribeTable,
+    SampleRows,
+    QueryRows,
+    QuerySql,
+    ProposeWrite,
+}
+
+impl Tool {
+    const ALL: [Tool; 7] = [
+        Tool::ListSchemas,
+        Tool::ListTables,
+        Tool::DescribeTable,
+        Tool::SampleRows,
+        Tool::QueryRows,
+        Tool::QuerySql,
+        Tool::ProposeWrite,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::ListSchemas => "list_schemas",
+            Tool::ListTables => "list_tables",
+            Tool::DescribeTable => "describe_table",
+            Tool::SampleRows => "sample_rows",
+            Tool::QueryRows => "query_rows",
+            Tool::QuerySql => "query_sql",
+            Tool::ProposeWrite => "propose_write",
+        }
+    }
+
+    /// Model-written SQL is reviewed by the user even when reads run unattended: a
+    /// read-only transaction does not stop every function with side effects.
+    pub fn requires_approval(self) -> bool {
+        matches!(self, Tool::QuerySql | Tool::ProposeWrite)
+    }
+}
+
+impl FromStr for Tool {
+    type Err = AppError;
+
+    fn from_str(name: &str) -> AppResult<Self> {
+        Tool::ALL
+            .into_iter()
+            .find(|tool| tool.name() == name)
+            .ok_or_else(|| AppError::msg("unknown database assistant tool"))
+    }
+}
+
+/// Errors from model-controlled tool calls. `Rejected` explains a refused request to the
+/// model so it can correct itself; `Failed` is withheld from the model because database
+/// errors may quote row values or connection details.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolError {
+    #[error("AI query: {0}")]
+    Rejected(String),
+    #[error(transparent)]
+    Failed(#[from] AppError),
+}
+
+impl From<tokio_postgres::Error> for ToolError {
+    fn from(error: tokio_postgres::Error) -> Self {
+        ToolError::Failed(error.into())
+    }
+}
+
+pub(super) fn rejected(message: impl Into<String>) -> ToolError {
+    ToolError::Rejected(message.into())
+}
 
 pub fn definitions(allow_data: bool) -> Vec<Value> {
     let mut tools = vec![
-        definition("list_schemas", "List user database schemas.", &[]),
+        definition(Tool::ListSchemas, "List user database schemas."),
         definition(
-            "list_tables",
+            Tool::ListTables,
             "List relations in a schema and their kinds.",
-            &["schema"],
         ),
         definition(
-            "describe_table",
+            Tool::DescribeTable,
             "Describe columns and outgoing foreign keys without reading table data.",
-            &["schema", "table"],
         ),
     ];
     if allow_data {
-        tools.push(definition("sample_rows", "Read at most 20 rows and 64 columns from an ordinary table. Values and output may be truncated. Requires explicit data sharing permission.", &["schema", "table"]));
+        tools.push(definition(Tool::SampleRows, "Read at most 20 rows and 64 columns from an ordinary table. Values and output may be truncated. Requires explicit data sharing permission."));
         tools.push(super::query::definition());
-        tools.push(json!({"type":"function","function":{"name":"query_sql","description":"Run one PostgreSQL read query using SQL, including CTEs, views, expressions and aggregates. Results are limited to 100 rows and may be truncated. Use only for reading; writes require propose_write.","parameters":{"type":"object","properties":{"sql":{"type":"string","minLength":1,"maxLength":16384}},"required":["sql"],"additionalProperties":false}}}));
+        tools.push(sql_definition(Tool::QuerySql, "Run one PostgreSQL read query using SQL, including CTEs, views, expressions and aggregates. The user must approve every call, so prefer query_rows when it suffices. Functions with side effects, file or server access, sleeps, locks and setting changes are blocked. Results are limited to 100 rows and may be truncated. Use only for reading; writes require propose_write."));
     }
     tools
 }
 
 pub fn write_definition() -> Value {
-    json!({"type":"function", "function": {"name":"propose_write", "description":"Propose a single SQL statement for explicit user review and approval. Do not include multiple statements. Execution occurs only after approval.", "parameters":{"type":"object", "properties":{"sql":{"type":"string", "minLength":1, "maxLength":16384}}, "required":["sql"], "additionalProperties":false}}})
+    sql_definition(
+        Tool::ProposeWrite,
+        "Propose a single SQL statement for explicit user review and approval. Do not include multiple statements. Execution occurs only after approval.",
+    )
+}
+
+fn sql_definition(tool: Tool, description: &str) -> Value {
+    json!({"type":"function", "function": {"name": tool.name(), "description": description, "parameters":{"type":"object", "properties":{"sql":{"type":"string", "minLength":1, "maxLength":MAX_SQL_BYTES}}, "required":["sql"], "additionalProperties":false}}})
+}
+
+/// The checked SQL of a `query_sql` call. It is also checked before asking for approval,
+/// so the user never reviews a request that would be refused anyway.
+pub fn read_sql(arguments: &Value, allow_data: bool) -> Result<&str, ToolError> {
+    if !allow_data {
+        return Err(rejected("data access is disabled"));
+    }
+    let sql = write_sql(arguments).map_err(|_| {
+        rejected(format!(
+            "expected one non-empty sql string of at most {MAX_SQL_BYTES} bytes"
+        ))
+    })?;
+    if let Some(name) = super::query::blocked_function(sql) {
+        return Err(rejected(format!(
+            "{name} is not allowed in query_sql; use plain reads without side effects"
+        )));
+    }
+    Ok(sql)
 }
 
 pub fn write_sql(arguments: &Value) -> AppResult<&str> {
@@ -46,13 +146,15 @@ pub fn write_sql(arguments: &Value) -> AppResult<&str> {
         .get("sql")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::msg("Invalid write request"))?;
-    if object.len() != 1 || sql.trim().is_empty() || sql.len() > 16_384 || sql.contains('\0') {
+    if object.len() != 1 || sql.trim().is_empty() || sql.len() > MAX_SQL_BYTES || sql.contains('\0')
+    {
         return Err(AppError::msg("Invalid write request"));
     }
     Ok(sql)
 }
 
-fn definition(name: &str, description: &str, fields: &[&str]) -> Value {
+fn definition(tool: Tool, description: &str) -> Value {
+    let fields = inspection_fields(tool).unwrap_or_default();
     let properties: serde_json::Map<String, Value> = fields
         .iter()
         .map(|field| {
@@ -64,21 +166,28 @@ fn definition(name: &str, description: &str, fields: &[&str]) -> Value {
         })
         .collect();
     json!({"type": "function", "function": {
-        "name": name, "description": description,
+        "name": tool.name(), "description": description,
         "parameters": {"type": "object", "properties": properties,
             "required": fields, "additionalProperties": false}
     }})
 }
 
-fn validate<'a>(name: &str, args: &'a Value, allow_data: bool) -> AppResult<Vec<&'a str>> {
-    let fields: &[&str] = match name {
-        "list_schemas" => &[],
-        "list_tables" => &["schema"],
-        "describe_table" => &["schema", "table"],
-        "sample_rows" if allow_data => &["schema", "table"],
-        "sample_rows" => return Err(AppError::msg("table data sharing is disabled")),
-        _ => return Err(AppError::msg("unknown database assistant tool")),
-    };
+/// The identifier arguments of the catalog inspection tools.
+fn inspection_fields(tool: Tool) -> Option<&'static [&'static str]> {
+    match tool {
+        Tool::ListSchemas => Some(&[]),
+        Tool::ListTables => Some(&["schema"]),
+        Tool::DescribeTable | Tool::SampleRows => Some(&["schema", "table"]),
+        Tool::QueryRows | Tool::QuerySql | Tool::ProposeWrite => None,
+    }
+}
+
+fn validate(tool: Tool, args: &Value, allow_data: bool) -> AppResult<Vec<&str>> {
+    if tool == Tool::SampleRows && !allow_data {
+        return Err(AppError::msg("table data sharing is disabled"));
+    }
+    let fields =
+        inspection_fields(tool).ok_or_else(|| AppError::msg("unknown database assistant tool"))?;
     let object = args
         .as_object()
         .ok_or_else(|| AppError::msg("tool arguments must be an object"))?;
@@ -94,12 +203,9 @@ fn validate<'a>(name: &str, args: &'a Value, allow_data: bool) -> AppResult<Vec<
                 .get(*field)
                 .and_then(Value::as_str)
                 .ok_or_else(|| AppError::msg("tool identifiers must be strings"))?;
-            if value.is_empty() || value.len() > 63 || value.contains('\0') {
-                return Err(AppError::msg(
-                    "tool identifiers must contain 1 to 63 bytes without NUL",
-                ));
-            }
-            Ok(value)
+            sql::checked_ident(value).map_err(|_| {
+                AppError::msg("tool identifiers must contain 1 to 63 bytes without NUL")
+            })
         })
         .collect()
 }
@@ -108,45 +214,50 @@ pub async fn execute(
     manager: &Manager,
     connection_id: &str,
     database: &str,
-    name: &str,
+    tool: Tool,
     args: &Value,
     allow_data: bool,
-) -> AppResult<Value> {
-    if name == "query_sql" {
-        if !allow_data {
-            return Err(AppError::msg("AI query: data access is disabled"));
-        }
-        let sql = write_sql(args).map_err(|_| {
-            AppError::msg("AI query: expected one non-empty sql string of at most 16384 bytes")
-        })?;
-        let conn = manager.ephemeral(connection_id, database).await?;
-        return super::query::execute_sql(&conn, sql).await;
-    }
-    if name == "query_rows" {
-        if !allow_data {
-            return Err(AppError::msg("AI query: data access is disabled"));
-        }
-        let query = super::query::Query::parse(args)?;
-        let conn = manager.ephemeral(connection_id, database).await?;
-        return super::query::execute(&conn, &query).await;
-    }
+) -> Result<Value, ToolError> {
     // Validate permission and every model-controlled argument before connecting.
-    let fields = validate(name, args, allow_data)?;
-    let conn = manager.ephemeral(connection_id, database).await?;
-    inspect(&conn, name, &fields).await
+    match tool {
+        Tool::QuerySql => {
+            let sql = read_sql(args, allow_data)?;
+            let conn = manager.ephemeral(connection_id, database).await?;
+            super::query::execute_sql(&conn, sql).await
+        }
+        Tool::QueryRows => {
+            if !allow_data {
+                return Err(rejected("data access is disabled"));
+            }
+            let query = super::query::Query::parse(args)?;
+            let conn = manager.ephemeral(connection_id, database).await?;
+            super::query::execute(&conn, &query).await
+        }
+        _ => {
+            let fields = validate(tool, args, allow_data)?;
+            let conn = manager.ephemeral(connection_id, database).await?;
+            inspect(&conn, tool, &fields).await
+        }
+    }
 }
 
-async fn inspect(conn: &crate::pg::PgConn, name: &str, fields: &[&str]) -> AppResult<Value> {
+async fn inspect(
+    conn: &crate::pg::PgConn,
+    tool: Tool,
+    fields: &[&str],
+) -> Result<Value, ToolError> {
     conn.client.batch_execute(
         "BEGIN READ ONLY; SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '2s'; SET LOCAL search_path = pg_catalog"
     ).await?;
-    let result: AppResult<Value> = async {
-        match name {
-            "list_schemas" => Ok(json!({"schemas": catalog::schemas(&conn.client, false).await?})),
-            "list_tables" => {
+    let result: Result<Value, ToolError> = async {
+        match tool {
+            Tool::ListSchemas => {
+                Ok(json!({"schemas": catalog::schemas(&conn.client, false).await?}))
+            }
+            Tool::ListTables => {
                 Ok(json!({"tables": catalog::relations(&conn.client, fields[0]).await?}))
             }
-            "describe_table" => {
+            Tool::DescribeTable => {
                 let columns = catalog::columns(&conn.client, fields[0], fields[1]).await?;
                 let keys = conn
                     .client
@@ -168,7 +279,7 @@ async fn inspect(conn: &crate::pg::PgConn, name: &str, fields: &[&str]) -> AppRe
                 })).collect();
                 Ok(json!({"columns": columns, "foreignKeys": keys}))
             }
-            "sample_rows" => {
+            Tool::SampleRows => {
                 let checked = super::query::table_columns(conn, fields[0], fields[1]).await?;
                 let columns = catalog::columns(&conn.client, fields[0], fields[1]).await?;
                 // One enum or array column should not hide the rest of the table; only
@@ -202,7 +313,9 @@ async fn inspect(conn: &crate::pg::PgConn, name: &str, fields: &[&str]) -> AppRe
                     "valuesMayBeTruncated": true, "order": "unspecified"}),
                 )
             }
-            _ => unreachable!("validated tool name"),
+            Tool::QueryRows | Tool::QuerySql | Tool::ProposeWrite => {
+                Err(AppError::msg("unknown database assistant tool").into())
+            }
         }
     }
     .await;
@@ -307,7 +420,7 @@ mod tests {
             &manager,
             "missing",
             "missing",
-            "query_rows",
+            Tool::QueryRows,
             &json!({}),
             false,
         )
@@ -318,7 +431,7 @@ mod tests {
             &manager,
             "missing",
             "missing",
-            "query_sql",
+            Tool::QuerySql,
             &json!({"sql":"SELECT 1"}),
             false,
         )
@@ -329,7 +442,7 @@ mod tests {
             &manager,
             "missing",
             "missing",
-            "query_sql",
+            Tool::QuerySql,
             &json!({"sql":"SELECT 1", "extra":true}),
             true,
         )
@@ -344,59 +457,61 @@ mod tests {
             &manager,
             "missing",
             "missing",
-            "query_rows",
+            Tool::QueryRows,
             &json!({"sql":"DELETE FROM users"}),
             true,
         )
         .await
         .unwrap_err();
         assert!(invalid.to_string().contains("invalid query plan"));
+        let blocked = execute(
+            &manager,
+            "missing",
+            "missing",
+            Tool::QuerySql,
+            &json!({"sql":"SELECT pg_sleep(60)"}),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(blocked, ToolError::Rejected(_)));
     }
 
     #[tokio::test]
-    #[ignore = "requires disposable localhost Postgres with GUCKPG_AI_TEST_PORT set"]
     async fn inspects_real_postgres_without_modifying_data() {
-        use crate::config::{ConnectionConfig, SslMode};
         use crate::pg::{PgConn, Transport};
 
-        let port = std::env::var("GUCKPG_AI_TEST_PORT")
-            .expect("set the disposable local Postgres port")
-            .parse()
-            .unwrap();
-        let config = ConnectionConfig {
-            id: "ai-test".into(),
-            name: "AI test".into(),
-            host: "127.0.0.1".into(),
-            port,
-            user: "postgres".into(),
-            database: "guckpg_ai_test".into(),
-            ssl_mode: SslMode::Disable,
-            read_only: false,
-            color: None,
-            ssh: None,
-            folder: None,
+        let Some((config, password)) = crate::testutil::test_db("ai-test") else {
+            return;
         };
-        let conn = PgConn::connect(&config, &config.database, None, Transport::Direct)
-            .await
-            .unwrap();
-        conn.client.batch_execute(
-            "CREATE SCHEMA ai_test;
-             CREATE TABLE ai_test.parents (id int PRIMARY KEY);
-             CREATE TABLE ai_test.children (id int PRIMARY KEY, parent_id int REFERENCES ai_test.parents, note text);
-             INSERT INTO ai_test.parents VALUES (1);
-             INSERT INTO ai_test.children SELECT n, 1, repeat('🦀', 2000) FROM generate_series(1, 30) n;
-             CREATE VIEW ai_test.child_view AS SELECT * FROM ai_test.children;"
-        ).await.unwrap();
-        let schemas = inspect(&conn, "list_schemas", &[]).await.unwrap();
+        let conn = PgConn::connect(
+            &config,
+            &config.database,
+            Some(&password),
+            Transport::Direct,
+        )
+        .await
+        .unwrap();
+        let schema = format!("ai_test_{}", uuid::Uuid::new_v4().simple());
+        let s = schema.as_str();
+        conn.client.batch_execute(&format!(
+            "CREATE SCHEMA {s};
+             CREATE TABLE {s}.parents (id int PRIMARY KEY);
+             CREATE TABLE {s}.children (id int PRIMARY KEY, parent_id int REFERENCES {s}.parents, note text);
+             INSERT INTO {s}.parents VALUES (1);
+             INSERT INTO {s}.children SELECT n, 1, repeat('🦀', 2000) FROM generate_series(1, 30) n;
+             CREATE VIEW {s}.child_view AS SELECT * FROM {s}.children;"
+        )).await.unwrap();
+        let schemas = inspect(&conn, Tool::ListSchemas, &[]).await.unwrap();
         assert!(
             schemas["data"]["schemas"]
                 .as_array()
                 .unwrap()
-                .contains(&json!("ai_test"))
+                .contains(&json!(s))
         );
-        let tables = inspect(&conn, "list_tables", &["ai_test"]).await.unwrap();
+        let tables = inspect(&conn, Tool::ListTables, &[s]).await.unwrap();
         assert_eq!(tables["data"]["tables"].as_array().unwrap().len(), 3);
-        let description = inspect(&conn, "describe_table", &["ai_test", "children"])
+        let description = inspect(&conn, Tool::DescribeTable, &[s, "children"])
             .await
             .unwrap();
         assert_eq!(description["data"]["columns"].as_array().unwrap().len(), 3);
@@ -404,29 +519,29 @@ mod tests {
             description["data"]["foreignKeys"][0]["targetTable"],
             "parents"
         );
-        let sample = inspect(&conn, "sample_rows", &["ai_test", "children"])
+        let sample = inspect(&conn, Tool::SampleRows, &[s, "children"])
             .await
             .unwrap();
         assert_eq!(sample["data"]["rows"].as_array().unwrap().len(), 20);
         assert_eq!(sample["truncated"], true);
         assert!(sample["data"]["rows"][0][2].as_str().unwrap().len() <= MAX_CELL_BYTES);
         assert!(
-            inspect(&conn, "sample_rows", &["ai_test", "child_view"])
+            inspect(&conn, Tool::SampleRows, &[s, "child_view"])
                 .await
                 .is_err()
         );
         assert!(
             inspect(
                 &conn,
-                "sample_rows",
-                &["ai_test", "children\"; DELETE FROM ai_test.children; --"]
+                Tool::SampleRows,
+                &[s, &format!("children\"; DELETE FROM {s}.children; --")]
             )
             .await
             .is_err()
         );
         let count: i64 = conn
             .client
-            .query_one("SELECT count(*) FROM ai_test.children", &[])
+            .query_one(&format!("SELECT count(*) FROM {s}.children"), &[])
             .await
             .unwrap()
             .get(0);
@@ -438,6 +553,10 @@ mod tests {
             .unwrap()
             .get(0);
         assert_eq!(read_only, "off");
+        conn.client
+            .batch_execute(&format!("DROP SCHEMA {s} CASCADE"))
+            .await
+            .unwrap();
     }
 
     #[test]
@@ -466,11 +585,16 @@ mod tests {
                 assert_eq!(tool["type"], "function");
                 let function = &tool["function"];
                 assert_eq!(function["parameters"]["additionalProperties"], false);
-                if function["name"] == "query_sql" {
-                    assert!(write_sql(&json!({"sql":"SELECT 1"})).is_ok());
+                let tool: Tool = function["name"].as_str().unwrap().parse().unwrap();
+                if tool == Tool::QuerySql {
+                    assert_eq!(
+                        function["parameters"]["properties"]["sql"]["maxLength"],
+                        MAX_SQL_BYTES
+                    );
+                    assert!(read_sql(&json!({"sql":"SELECT 1"}), allow_data).is_ok());
                     continue;
                 }
-                if function["name"] == "query_rows" {
+                if tool == Tool::QueryRows {
                     assert_eq!(
                         function["parameters"]["properties"]["limit"]["maximum"],
                         100
@@ -483,31 +607,65 @@ mod tests {
                     .iter()
                     .map(|field| (field.as_str().unwrap().to_string(), json!("example")))
                     .collect();
-                assert!(
-                    validate(
-                        function["name"].as_str().unwrap(),
-                        &Value::Object(args),
-                        allow_data
-                    )
-                    .is_ok()
-                );
+                assert!(validate(tool, &Value::Object(args), allow_data).is_ok());
             }
+        }
+        assert_eq!(write_definition()["function"]["name"], "propose_write");
+    }
+
+    #[test]
+    fn tool_names_round_trip_and_unknown_names_are_rejected() {
+        for tool in Tool::ALL {
+            assert_eq!(tool.name().parse::<Tool>().unwrap(), tool);
+        }
+        assert!("execute_sql".parse::<Tool>().is_err());
+        assert!("QUERY_SQL".parse::<Tool>().is_err());
+        assert!(Tool::QuerySql.requires_approval());
+        assert!(Tool::ProposeWrite.requires_approval());
+        assert!(!Tool::QueryRows.requires_approval());
+        assert!(!Tool::SampleRows.requires_approval());
+    }
+
+    #[test]
+    fn read_sql_rejects_disabled_data_malformed_and_dangerous_requests() {
+        assert_eq!(
+            read_sql(&json!({"sql": "SELECT count(*) FROM orders"}), true).unwrap(),
+            "SELECT count(*) FROM orders"
+        );
+        for (args, allow_data, reason) in [
+            (json!({"sql": "SELECT 1"}), false, "data access is disabled"),
+            (json!({"sql": " "}), true, "expected one non-empty sql"),
+            (
+                json!({"sql": "SELECT pg_read_file('/etc/passwd')"}),
+                true,
+                "pg_read_file is not allowed",
+            ),
+            (
+                json!({"sql": "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"}),
+                true,
+                "pg_terminate_backend is not allowed",
+            ),
+        ] {
+            let error = read_sql(&args, allow_data).unwrap_err();
+            assert!(matches!(error, ToolError::Rejected(_)));
+            assert!(error.to_string().contains(reason), "{error}");
         }
     }
 
     #[test]
     fn rejects_untrusted_arguments_and_disabled_data() {
-        assert!(validate("execute_sql", &json!({"sql": "SELECT 1"}), true).is_err());
+        assert!(validate(Tool::QuerySql, &json!({"sql": "SELECT 1"}), true).is_err());
+        assert!(validate(Tool::ProposeWrite, &json!({"sql": "SELECT 1"}), true).is_err());
         assert!(
             validate(
-                "sample_rows",
+                Tool::SampleRows,
                 &json!({"schema": "public", "table": "users"}),
                 false
             )
             .is_err()
         );
-        assert!(validate("list_schemas", &json!({"sql": "DROP TABLE users"}), true).is_err());
-        assert!(validate("list_tables", &json!({}), true).is_err());
+        assert!(validate(Tool::ListSchemas, &json!({"sql": "DROP TABLE users"}), true).is_err());
+        assert!(validate(Tool::ListTables, &json!({}), true).is_err());
         for invalid in [
             json!(null),
             json!({"schema": 1}),
@@ -515,7 +673,7 @@ mod tests {
             json!({"schema": "a\0b"}),
             json!({"schema": "é".repeat(32)}),
         ] {
-            assert!(validate("list_tables", &invalid, true).is_err());
+            assert!(validate(Tool::ListTables, &invalid, true).is_err());
         }
     }
 

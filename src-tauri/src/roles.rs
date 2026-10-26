@@ -7,10 +7,12 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tokio_postgres::Client;
+use tokio_postgres::types::Type;
 
+use crate::catalog::RelKind;
 use crate::error::{AppError, AppResult};
 use crate::session::Manager;
-use crate::sql::{qualified, quote_ident, quote_literal};
+use crate::sql::{checked_ident, in_tx, literal_or_null, qualified, quote_ident, quote_literal};
 
 const DATABASE_PRIVILEGES: &[&str] = &["CONNECT", "CREATE", "TEMPORARY"];
 const SCHEMA_PRIVILEGES: &[&str] = &["USAGE", "CREATE"];
@@ -54,17 +56,50 @@ pub struct Membership {
     admin: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PrivilegeObjectKind {
+    Database,
+    Schema,
+    #[serde(untagged)]
+    Relation(RelKind),
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectPrivileges {
     schema: Option<String>,
     name: String,
-    kind: &'static str,
+    kind: PrivilegeObjectKind,
     owner: bool,
     /// Granted to the role directly.
     granted: Vec<String>,
+    /// Who granted each entry of `granted`. A REVOKE only removes grants
+    /// made by the revoking role (or the owner, for superusers), so
+    /// privileges granted by someone else survive it.
+    grants: Vec<Grant>,
     /// What the role can actually do, including ownership, PUBLIC and memberships.
     effective: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Grant {
+    privilege: String,
+    grantor: String,
+}
+
+/// The `granted` privileges and their grantors as two aligned arrays, for
+/// [`object_privileges`]. `$1` is the role's oid.
+fn direct_grants_sql(acl: &str) -> String {
+    let rows = format!(
+        "FROM pg_catalog.aclexplode({acl}) a WHERE a.grantee = $1::oid
+         ORDER BY a.privilege_type, a.grantor"
+    );
+    format!(
+        "ARRAY(SELECT a.privilege_type::text {rows}),
+         ARRAY(SELECT pg_catalog.pg_get_userbyid(a.grantor)::text {rows})"
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -114,15 +149,15 @@ pub async fn details(client: &Client, name: &str) -> AppResult<RoleDetails> {
     .await?;
     let databases = client
         .query(
-            "SELECT NULL::text, d.datname::text, 'database', d.datdba = $1::oid,
-                    ARRAY(SELECT a.privilege_type::text
-                          FROM pg_catalog.aclexplode(COALESCE(d.datacl,
-                               pg_catalog.acldefault('d', d.datdba))) a
-                          WHERE a.grantee = $1::oid),
-                    ARRAY(SELECT p FROM unnest(ARRAY['CONNECT', 'CREATE', 'TEMPORARY']) p
-                          WHERE pg_catalog.has_database_privilege($1::oid, d.oid, p))
-             FROM pg_catalog.pg_database d
-             WHERE d.datallowconn AND NOT d.datistemplate ORDER BY 2",
+            &format!(
+                "SELECT NULL::text, d.datname::text, 'database', d.datdba = $1::oid,
+                        {},
+                        ARRAY(SELECT p FROM unnest(ARRAY['CONNECT', 'CREATE', 'TEMPORARY']) p
+                              WHERE pg_catalog.has_database_privilege($1::oid, d.oid, p))
+                 FROM pg_catalog.pg_database d
+                 WHERE d.datallowconn AND NOT d.datistemplate ORDER BY 2",
+                direct_grants_sql("COALESCE(d.datacl, pg_catalog.acldefault('d', d.datdba))")
+            ),
             &[&oid],
         )
         .await?;
@@ -151,23 +186,34 @@ pub async fn details(client: &Client, name: &str) -> AppResult<RoleDetails> {
     })
 }
 
+fn object_kind(kind: &str) -> PrivilegeObjectKind {
+    match kind {
+        "database" => PrivilegeObjectKind::Database,
+        "schema" => PrivilegeObjectKind::Schema,
+        relkind => PrivilegeObjectKind::Relation(RelKind::from_code(
+            relkind.bytes().next().unwrap_or_default(),
+        )),
+    }
+}
+
 fn object_privileges(row: &tokio_postgres::Row) -> ObjectPrivileges {
+    let granted: Vec<String> = row.get(4);
+    let grantors: Vec<String> = row.get(5);
     ObjectPrivileges {
         schema: row.get(0),
         name: row.get(1),
-        kind: match row.get::<_, &str>(2) {
-            "database" => "database",
-            "schema" => "schema",
-            "r" => "table",
-            "p" => "partitioned",
-            "v" => "view",
-            "m" => "materialized",
-            "f" => "foreign",
-            _ => "other",
-        },
+        kind: object_kind(row.get(2)),
         owner: row.get(3),
-        granted: row.get(4),
-        effective: row.get(5),
+        grants: granted
+            .iter()
+            .zip(grantors)
+            .map(|(privilege, grantor)| Grant {
+                privilege: privilege.clone(),
+                grantor,
+            })
+            .collect(),
+        granted,
+        effective: row.get(6),
     }
 }
 
@@ -183,34 +229,34 @@ pub async fn privileges(client: &Client, name: &str) -> AppResult<RolePrivileges
         .get(0);
     let schemas = client
         .query(
-            "SELECT NULL::text, n.nspname::text, 'schema', n.nspowner = $1::oid,
-                    ARRAY(SELECT a.privilege_type::text
-                          FROM pg_catalog.aclexplode(COALESCE(n.nspacl,
-                               pg_catalog.acldefault('n', n.nspowner))) a
-                          WHERE a.grantee = $1::oid),
-                    ARRAY(SELECT p FROM unnest(ARRAY['USAGE', 'CREATE']) p
-                          WHERE pg_catalog.has_schema_privilege($1::oid, n.oid, p))
-             FROM pg_catalog.pg_namespace n
-             WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
-             ORDER BY 2",
+            &format!(
+                "SELECT NULL::text, n.nspname::text, 'schema', n.nspowner = $1::oid,
+                        {},
+                        ARRAY(SELECT p FROM unnest(ARRAY['USAGE', 'CREATE']) p
+                              WHERE pg_catalog.has_schema_privilege($1::oid, n.oid, p))
+                 FROM pg_catalog.pg_namespace n
+                 WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+                 ORDER BY 2",
+                direct_grants_sql("COALESCE(n.nspacl, pg_catalog.acldefault('n', n.nspowner))")
+            ),
             &[&oid],
         )
         .await?;
     let relations = client
         .query(
-            "SELECT n.nspname::text, c.relname::text, c.relkind::text, c.relowner = $1::oid,
-                    ARRAY(SELECT a.privilege_type::text
-                          FROM pg_catalog.aclexplode(COALESCE(c.relacl,
-                               pg_catalog.acldefault('r', c.relowner))) a
-                          WHERE a.grantee = $1::oid),
-                    ARRAY(SELECT p FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE',
-                                                     'TRUNCATE', 'REFERENCES', 'TRIGGER']) p
-                          WHERE pg_catalog.has_table_privilege($1::oid, c.oid, p))
-             FROM pg_catalog.pg_class c
-             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-             WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
-               AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
-             ORDER BY 1, 2",
+            &format!(
+                "SELECT n.nspname::text, c.relname::text, c.relkind::text, c.relowner = $1::oid,
+                        {},
+                        ARRAY(SELECT p FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE',
+                                                         'TRUNCATE', 'REFERENCES', 'TRIGGER']) p
+                              WHERE pg_catalog.has_table_privilege($1::oid, c.oid, p))
+                 FROM pg_catalog.pg_class c
+                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                   AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+                 ORDER BY 1, 2",
+                direct_grants_sql("COALESCE(c.relacl, pg_catalog.acldefault('r', c.relowner))")
+            ),
             &[&oid],
         )
         .await?;
@@ -289,13 +335,6 @@ pub struct RoleChanges {
     privileges: Vec<PrivilegeChange>,
 }
 
-fn check_name(name: &str) -> AppResult<()> {
-    if name.is_empty() || name.len() > 63 || name.contains('\0') {
-        return Err(AppError::msg(format!("Invalid role name \"{name}\".")));
-    }
-    Ok(())
-}
-
 fn check_text(value: &str) -> AppResult<()> {
     if value.contains('\0') {
         return Err(AppError::msg("Text must not contain NUL characters."));
@@ -303,10 +342,67 @@ fn check_text(value: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// The privileges granted or revoked on one object.
+struct PrivilegeGroup<'a> {
+    revoke: bool,
+    target: &'a PrivilegeTarget,
+    /// The object as it appears after `ON`.
+    object: String,
+    privileges: Vec<&'static str>,
+}
+
+/// One GRANT and one REVOKE per object keeps the script short and readable.
+fn privilege_groups(changes: &RoleChanges) -> AppResult<Vec<PrivilegeGroup<'_>>> {
+    let mut grouped: BTreeMap<(bool, u8, String), PrivilegeGroup<'_>> = BTreeMap::new();
+    for change in &changes.privileges {
+        let (order, object, allowed) = match &change.target {
+            PrivilegeTarget::Database { name } => (
+                0,
+                format!("DATABASE {}", quote_ident(name)),
+                DATABASE_PRIVILEGES,
+            ),
+            PrivilegeTarget::Schema { name } => (
+                1,
+                format!("SCHEMA {}", quote_ident(name)),
+                SCHEMA_PRIVILEGES,
+            ),
+            PrivilegeTarget::Table { schema, name } => (
+                2,
+                format!("TABLE {}", qualified(schema, name)),
+                TABLE_PRIVILEGES,
+            ),
+        };
+        let privilege = *allowed
+            .iter()
+            .find(|p| p.eq_ignore_ascii_case(&change.privilege))
+            .ok_or_else(|| AppError::msg(format!("Unknown privilege {}.", change.privilege)))?;
+        let group = grouped
+            .entry((!change.grant, order, object.clone()))
+            .or_insert_with(|| PrivilegeGroup {
+                revoke: !change.grant,
+                target: &change.target,
+                object,
+                privileges: Vec::new(),
+            });
+        if !group.privileges.contains(&privilege) {
+            group.privileges.push(privilege);
+        }
+    }
+    let mut groups: Vec<_> = grouped.into_values().collect();
+    for group in &mut groups {
+        group.privileges.sort_by_key(|p| {
+            [DATABASE_PRIVILEGES, SCHEMA_PRIVILEGES, TABLE_PRIVILEGES]
+                .iter()
+                .find_map(|list| list.iter().position(|x| x == p))
+        });
+    }
+    Ok(groups)
+}
+
 /// The statements for `changes`. `hash` turns a password into what gets sent;
 /// previews pass a placeholder so the password never shows up.
 pub fn plan(changes: &RoleChanges, hash: impl Fn(&str) -> String) -> AppResult<Vec<String>> {
-    check_name(&changes.name)?;
+    checked_ident(&changes.name)?;
     let role = quote_ident(&changes.name);
     let mut statements = Vec::new();
 
@@ -370,56 +466,23 @@ pub fn plan(changes: &RoleChanges, hash: impl Fn(&str) -> String) -> AppResult<V
         }
         statements.push(format!(
             "COMMENT ON ROLE {role} IS {}",
-            value.map(quote_literal).unwrap_or_else(|| "NULL".into())
+            literal_or_null(value)
         ));
     }
 
     for group in &changes.grant_roles {
-        check_name(group)?;
+        checked_ident(group)?;
         statements.push(format!("GRANT {} TO {role}", quote_ident(group)));
     }
     for group in &changes.revoke_roles {
-        check_name(group)?;
+        checked_ident(group)?;
         statements.push(format!("REVOKE {} FROM {role}", quote_ident(group)));
     }
 
-    // One GRANT and one REVOKE per object keeps the script short and readable.
-    let mut grouped: BTreeMap<(bool, u8, String), Vec<&str>> = BTreeMap::new();
-    for change in &changes.privileges {
-        let (order, object, allowed) = match &change.target {
-            PrivilegeTarget::Database { name } => (
-                0,
-                format!("DATABASE {}", quote_ident(name)),
-                DATABASE_PRIVILEGES,
-            ),
-            PrivilegeTarget::Schema { name } => (
-                1,
-                format!("SCHEMA {}", quote_ident(name)),
-                SCHEMA_PRIVILEGES,
-            ),
-            PrivilegeTarget::Table { schema, name } => (
-                2,
-                format!("TABLE {}", qualified(schema, name)),
-                TABLE_PRIVILEGES,
-            ),
-        };
-        let privilege = allowed
-            .iter()
-            .find(|p| p.eq_ignore_ascii_case(&change.privilege))
-            .ok_or_else(|| AppError::msg(format!("Unknown privilege {}.", change.privilege)))?;
-        let entry = grouped.entry((!change.grant, order, object)).or_default();
-        if !entry.contains(privilege) {
-            entry.push(privilege);
-        }
-    }
-    for ((revoke, _, object), mut privileges) in grouped {
-        privileges.sort_by_key(|p| {
-            [DATABASE_PRIVILEGES, SCHEMA_PRIVILEGES, TABLE_PRIVILEGES]
-                .iter()
-                .find_map(|list| list.iter().position(|x| x == p))
-        });
-        let list = privileges.join(", ");
-        statements.push(if revoke {
+    for group in privilege_groups(changes)? {
+        let list = group.privileges.join(", ");
+        let object = group.object;
+        statements.push(if group.revoke {
             format!("REVOKE {list} ON {object} FROM {role}")
         } else {
             format!("GRANT {list} ON {object} TO {role}")
@@ -428,20 +491,13 @@ pub fn plan(changes: &RoleChanges, hash: impl Fn(&str) -> String) -> AppResult<V
 
     // Last, so every statement above can use the old name.
     if let Some(new_name) = changes.rename.as_deref().filter(|n| *n != changes.name) {
-        check_name(new_name)?;
+        checked_ident(new_name)?;
         statements.push(format!(
             "ALTER ROLE {role} RENAME TO {}",
             quote_ident(new_name)
         ));
     }
     Ok(statements)
-}
-
-fn ensure_writable(manager: &Manager, id: &str) -> AppResult<()> {
-    if manager.store.get(id)?.read_only {
-        return Err(AppError::msg("This connection is configured as read-only."));
-    }
-    Ok(())
 }
 
 #[tauri::command]
@@ -479,33 +535,167 @@ pub async fn apply_role_changes(
     database: String,
     changes: RoleChanges,
 ) -> AppResult<()> {
-    ensure_writable(&manager, &id)?;
-    let statements = plan(&changes, |p| {
-        postgres_protocol::password::scram_sha_256(p.as_bytes())
-    })?;
+    manager.ensure_writable(&id)?;
+    let statements = plan(&changes, scram_hash)?;
     if statements.is_empty() {
         return Ok(());
     }
     let conn = manager.open(&id, &database).await?;
-    apply(&conn.client, &statements).await
+    apply_verified(&conn.client, &statements, &changes).await
 }
 
-pub async fn apply(client: &Client, statements: &[String]) -> AppResult<()> {
-    client.batch_execute("BEGIN").await?;
-    for statement in statements {
-        if let Err(e) = client.batch_execute(statement).await {
-            let _ = client.batch_execute("ROLLBACK").await;
-            return Err(e.into());
+/// The verifier is computed from the password, so the server never sees
+/// (or logs) the plaintext.
+fn scram_hash(password: &str) -> String {
+    postgres_protocol::password::scram_sha_256(password.as_bytes())
+}
+
+/// Runs `statements` in one transaction and fails (rolling back) when a
+/// revoked privilege is still granted afterwards, which happens when someone
+/// other than the current user granted it: PostgreSQL then skips it without
+/// an error.
+pub async fn apply_verified(
+    client: &Client,
+    statements: &[String],
+    changes: &RoleChanges,
+) -> AppResult<()> {
+    in_tx(client, "BEGIN", || async {
+        for statement in statements {
+            client.batch_execute(statement).await?;
+        }
+        verify_revocations(client, changes).await
+    })
+    .await
+}
+
+async fn verify_revocations(client: &Client, changes: &RoleChanges) -> AppResult<()> {
+    // Runs after the statements, so the rename (always last) has happened.
+    let role = changes.rename.as_deref().unwrap_or(&changes.name);
+    for group in privilege_groups(changes)?.iter().filter(|g| g.revoke) {
+        let (acl_source, name, schema) = match group.target {
+            PrivilegeTarget::Database { name } => (
+                "pg_catalog.pg_database o, pg_catalog.aclexplode(o.datacl) a
+                 WHERE o.datname = $2",
+                name,
+                None,
+            ),
+            PrivilegeTarget::Schema { name } => (
+                "pg_catalog.pg_namespace o, pg_catalog.aclexplode(o.nspacl) a
+                 WHERE o.nspname = $2",
+                name,
+                None,
+            ),
+            PrivilegeTarget::Table { schema, name } => (
+                "pg_catalog.pg_class o
+                 JOIN pg_catalog.pg_namespace n ON n.oid = o.relnamespace,
+                 pg_catalog.aclexplode(o.relacl) a
+                 WHERE o.relname = $2 AND n.nspname = $3",
+                name,
+                Some(schema.as_str()),
+            ),
+        };
+        let rows = client
+            .query_typed(
+                &format!(
+                    "SELECT a.privilege_type::text, pg_catalog.pg_get_userbyid(a.grantor)::text
+                     FROM {acl_source}
+                       AND a.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1)
+                       AND a.privilege_type = ANY ($4)
+                     ORDER BY 1, 2"
+                ),
+                &[
+                    (&role, Type::TEXT),
+                    (name, Type::TEXT),
+                    (&schema, Type::TEXT),
+                    (&group.privileges, Type::TEXT_ARRAY),
+                ],
+            )
+            .await?;
+        let surviving: Vec<Grant> = rows
+            .iter()
+            .map(|r| Grant {
+                privilege: r.get(0),
+                grantor: r.get(1),
+            })
+            .collect();
+        if let Some(message) = surviving_grants_message(&group.object, &surviving) {
+            return Err(AppError::msg(message));
         }
     }
-    client.batch_execute("COMMIT").await?;
+    Ok(())
+}
+
+fn surviving_grants_message(object: &str, surviving: &[Grant]) -> Option<String> {
+    if surviving.is_empty() {
+        return None;
+    }
+    let list = surviving
+        .iter()
+        .map(|g| format!("{} (granted by {})", g.privilege, quote_ident(&g.grantor)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "Could not revoke {list} on {object}: only the role that granted a privilege can revoke it. Nothing was changed."
+    ))
+}
+
+pub fn create_role_sql(
+    name: &str,
+    password: Option<&str>,
+    login: bool,
+    create_db: bool,
+    create_role: bool,
+    hash: impl Fn(&str) -> String,
+) -> AppResult<String> {
+    checked_ident(name)?;
+    let mut sql = format!(
+        "CREATE ROLE {} {} {} {}",
+        quote_ident(name),
+        if login { "LOGIN" } else { "NOLOGIN" },
+        if create_db { "CREATEDB" } else { "NOCREATEDB" },
+        if create_role {
+            "CREATEROLE"
+        } else {
+            "NOCREATEROLE"
+        }
+    );
+    if let Some(password) = password {
+        if password.is_empty() || password.contains('\0') {
+            return Err(AppError::msg("Invalid password."));
+        }
+        sql.push_str(&format!(" PASSWORD {}", quote_literal(&hash(password))));
+    }
+    Ok(sql)
+}
+
+#[tauri::command]
+pub async fn create_role(
+    manager: State<'_, Manager>,
+    id: String,
+    name: String,
+    password: Option<String>,
+    login: bool,
+    create_db: bool,
+    create_role: bool,
+) -> AppResult<()> {
+    manager.ensure_writable(&id)?;
+    let sql = create_role_sql(
+        &name,
+        password.as_deref(),
+        login,
+        create_db,
+        create_role,
+        scram_hash,
+    )?;
+    let conn = manager.meta(&id, "").await?;
+    conn.client.batch_execute(&sql).await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn drop_role(manager: State<'_, Manager>, id: String, name: String) -> AppResult<()> {
-    ensure_writable(&manager, &id)?;
-    check_name(&name)?;
+    manager.ensure_writable(&id)?;
+    checked_ident(&name)?;
     let conn = manager.meta(&id, "").await?;
     conn.client
         .batch_execute(&format!("DROP ROLE {}", quote_ident(&name)))
@@ -638,6 +828,88 @@ mod tests {
             preview(serde_json::json!({ "name": "app", "attributes": { "connectionLimit": -2 } }))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn creates_roles_with_hashed_password_and_explicit_privileges() {
+        assert_eq!(
+            create_role_sql("a\"b", Some("a'b\\c"), true, false, true, |p| format!(
+                "HASH({p})"
+            ))
+            .unwrap(),
+            "CREATE ROLE \"a\"\"b\" LOGIN NOCREATEDB CREATEROLE PASSWORD E'HASH(a''b\\\\c)'"
+        );
+        assert_eq!(
+            create_role_sql("app", None, false, true, false, |_| unreachable!()).unwrap(),
+            "CREATE ROLE \"app\" NOLOGIN CREATEDB NOCREATEROLE"
+        );
+        assert!(create_role_sql("", None, true, false, false, |p| p.into()).is_err());
+        assert!(create_role_sql(&"a".repeat(64), None, true, false, false, |p| p.into()).is_err());
+        assert!(
+            create_role_sql("role", Some("bad\0password"), true, false, false, |p| p
+                .into())
+            .is_err()
+        );
+        assert!(create_role_sql("role", Some(""), true, false, false, |p| p.into()).is_err());
+    }
+
+    #[test]
+    fn created_roles_never_carry_the_plaintext_password() {
+        let sql = create_role_sql("app", Some("hunter2"), true, false, false, scram_hash).unwrap();
+        assert!(!sql.contains("hunter2"));
+        assert!(sql.contains("PASSWORD 'SCRAM-SHA-256$"));
+    }
+
+    #[test]
+    fn privilege_kinds_serialize_like_before() {
+        for (code, wire) in [
+            ("database", "database"),
+            ("schema", "schema"),
+            ("r", "table"),
+            ("p", "partitioned"),
+            ("v", "view"),
+            ("m", "materialized"),
+            ("f", "foreign"),
+            ("S", "other"),
+        ] {
+            assert_eq!(serde_json::to_value(object_kind(code)).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn revocations_are_grouped_per_object() {
+        let changes = changes(serde_json::json!({
+            "name": "app",
+            "privileges": [
+                { "target": { "kind": "table", "schema": "s", "name": "t" }, "privilege": "delete", "grant": false },
+                { "target": { "kind": "table", "schema": "s", "name": "t" }, "privilege": "SELECT", "grant": false },
+                { "target": { "kind": "table", "schema": "s", "name": "t" }, "privilege": "INSERT", "grant": true },
+            ],
+        }));
+        let groups = privilege_groups(&changes).unwrap();
+        let revoked: Vec<_> = groups.iter().filter(|g| g.revoke).collect();
+        assert_eq!(revoked.len(), 1);
+        assert_eq!(revoked[0].object, "TABLE \"s\".\"t\"");
+        assert_eq!(revoked[0].privileges, ["SELECT", "DELETE"]);
+        assert!(matches!(
+            revoked[0].target,
+            PrivilegeTarget::Table { schema, name } if schema == "s" && name == "t"
+        ));
+    }
+
+    #[test]
+    fn explains_privileges_a_revoke_could_not_remove() {
+        assert_eq!(surviving_grants_message("TABLE \"t\"", &[]), None);
+        let message = surviving_grants_message(
+            "TABLE \"t\"",
+            &[Grant {
+                privilege: "SELECT".into(),
+                grantor: "alice".into(),
+            }],
+        )
+        .unwrap();
+        assert!(message.contains("SELECT (granted by \"alice\") on TABLE \"t\""));
+        assert!(message.contains("Nothing was changed"));
     }
 
     #[test]

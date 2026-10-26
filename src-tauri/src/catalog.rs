@@ -9,12 +9,112 @@ use tokio_postgres::types::Type;
 use crate::error::{AppError, AppResult};
 use crate::sql::{qualified, quote_ident};
 
+/// `pg_class.relkind` of the relations the app browses, named the way the
+/// frontend shows them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RelKind {
+    Table,
+    Partitioned,
+    View,
+    Materialized,
+    Foreign,
+    Other,
+}
+
+impl RelKind {
+    pub fn from_code(relkind: u8) -> Self {
+        match relkind {
+            b'r' => Self::Table,
+            b'p' => Self::Partitioned,
+            b'v' => Self::View,
+            b'm' => Self::Materialized,
+            b'f' => Self::Foreign,
+            _ => Self::Other,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::Partitioned => "partitioned",
+            Self::View => "view",
+            Self::Materialized => "materialized",
+            Self::Foreign => "foreign",
+            Self::Other => "other",
+        }
+    }
+}
+
+impl PartialEq<&str> for RelKind {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+/// Objects whose definition can be shown as SQL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectKind {
+    Function,
+    Procedure,
+    Trigger,
+    Sequence,
+    View,
+    Materialized,
+}
+
+impl ObjectKind {
+    const ALL: [Self; 6] = [
+        Self::Function,
+        Self::Procedure,
+        Self::Trigger,
+        Self::Sequence,
+        Self::View,
+        Self::Materialized,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Procedure => "procedure",
+            Self::Trigger => "trigger",
+            Self::Sequence => "sequence",
+            Self::View => "view",
+            Self::Materialized => "materialized",
+        }
+    }
+}
+
+impl std::str::FromStr for ObjectKind {
+    type Err = AppError;
+
+    fn from_str(kind: &str) -> AppResult<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|k| k.as_str() == kind)
+            .ok_or_else(|| AppError::msg("unsupported object kind"))
+    }
+}
+
+/// Column names of a constraint's `conkey`, in the constraint's own order,
+/// which matters for composite keys. Expects the constraint aliased `con`.
+pub const CONSTRAINT_COLUMNS: &str = "ARRAY(SELECT a.attname::text
+        FROM pg_catalog.unnest(con.conkey) WITH ORDINALITY k(attnum, i)
+        JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+        ORDER BY k.i)";
+
+/// Like [`CONSTRAINT_COLUMNS`], for the referenced columns (`confkey`) of a
+/// foreign key.
+pub const REFERENCED_COLUMNS: &str = "ARRAY(SELECT a.attname::text
+        FROM pg_catalog.unnest(con.confkey) WITH ORDINALITY k(attnum, i)
+        JOIN pg_catalog.pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum
+        ORDER BY k.i)";
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Relation {
     pub name: String,
-    /// table, partitioned, view, materialized, foreign
-    pub kind: &'static str,
+    pub kind: RelKind,
     pub estimated_rows: Option<i64>,
 }
 
@@ -83,12 +183,11 @@ pub async fn objects(client: &Client, schema: &str) -> AppResult<Vec<SchemaObjec
         .map(|row| SchemaObject {
             oid: row.get(0),
             name: row.get(1),
-            kind: match row.get::<_, &str>(2) {
-                "procedure" => "procedure",
-                "trigger" => "trigger",
-                "sequence" => "sequence",
-                _ => "function",
-            },
+            kind: row
+                .get::<_, &str>(2)
+                .parse()
+                .unwrap_or(ObjectKind::Function)
+                .as_str(),
             identity: row.get(3),
         })
         .collect())
@@ -108,7 +207,13 @@ fn definition_with_path(definition: &str, path: &[String]) -> String {
     )
 }
 
-fn view_definition(schema: &str, name: &str, kind: &str, query: &str, options: &str) -> String {
+fn view_definition(
+    schema: &str,
+    name: &str,
+    materialized: bool,
+    query: &str,
+    options: &str,
+) -> String {
     let target = qualified(schema, name);
     let query = query.trim_end().trim_end_matches(';');
     let options = if options.is_empty() {
@@ -116,7 +221,7 @@ fn view_definition(schema: &str, name: &str, kind: &str, query: &str, options: &
     } else {
         format!(" WITH ({options})")
     };
-    if kind == "materialized" {
+    if materialized {
         format!(
             "-- Materialized views cannot be replaced directly; review dependencies before recreating.\nCREATE MATERIALIZED VIEW {target}{options} AS\n{query}"
         )
@@ -125,14 +230,24 @@ fn view_definition(schema: &str, name: &str, kind: &str, query: &str, options: &
     }
 }
 
+/// `kind` is the name the frontend uses, see [`ObjectKind::as_str`].
 pub async fn object_definition(
     client: &Client,
     schema: &str,
     kind: &str,
     oid: u32,
 ) -> AppResult<String> {
+    definition_of(client, schema, kind.parse()?, oid).await
+}
+
+async fn definition_of(
+    client: &Client,
+    schema: &str,
+    kind: ObjectKind,
+    oid: u32,
+) -> AppResult<String> {
     let query = match kind {
-        "view" | "materialized" => {
+        ObjectKind::View | ObjectKind::Materialized => {
             "SELECT c.relname::text, pg_catalog.pg_get_viewdef(c.oid, false),
                     pg_catalog.current_schemas(true)::text[],
                     COALESCE((SELECT pg_catalog.string_agg(
@@ -143,7 +258,7 @@ pub async fn object_definition(
              WHERE c.oid = $1 AND n.nspname = $2
                AND c.relkind = CASE $3 WHEN 'view' THEN 'v'::\"char\" ELSE 'm'::\"char\" END"
         }
-        "function" | "procedure" => {
+        ObjectKind::Function | ObjectKind::Procedure => {
             "SELECT p.proname::text, pg_catalog.pg_get_functiondef(p.oid),
                     pg_catalog.current_schemas(true)::text[]
              FROM pg_catalog.pg_proc p
@@ -151,7 +266,7 @@ pub async fn object_definition(
              WHERE p.oid = $1 AND n.nspname = $2
                AND p.prokind = CASE $3 WHEN 'function' THEN 'f'::\"char\" ELSE 'p'::\"char\" END"
         }
-        "trigger" => {
+        ObjectKind::Trigger => {
             "SELECT t.tgname::text,
                     '-- For an existing trigger, use CREATE OR REPLACE TRIGGER where supported or an explicit change.\n'
                         || pg_catalog.pg_get_triggerdef(t.oid, false),
@@ -161,7 +276,7 @@ pub async fn object_definition(
              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
              WHERE t.oid = $1 AND n.nspname = $2 AND $3 = 'trigger' AND NOT t.tgisinternal"
         }
-        "sequence" => {
+        ObjectKind::Sequence => {
             "SELECT c.relname::text,
                     pg_catalog.format(
                         '-- For an existing sequence, use ALTER SEQUENCE; current value is not included.\nCREATE SEQUENCE %I.%I AS %s\n    INCREMENT BY %s\n    MINVALUE %s\n    MAXVALUE %s\n    START WITH %s\n    CACHE %s\n    %s',
@@ -174,7 +289,6 @@ pub async fn object_definition(
              JOIN pg_catalog.pg_sequence s ON s.seqrelid = c.oid
              WHERE c.oid = $1 AND n.nspname = $2 AND c.relkind = 'S' AND $3 = 'sequence'"
         }
-        _ => return Err(AppError::msg("unsupported object kind")),
     };
     let row = client
         .query_typed_opt(
@@ -182,7 +296,7 @@ pub async fn object_definition(
             &[
                 (&oid, Type::OID),
                 (&schema, Type::NAME),
-                (&kind, Type::TEXT),
+                (&kind.as_str(), Type::TEXT),
             ],
         )
         .await?
@@ -190,8 +304,14 @@ pub async fn object_definition(
             AppError::msg("object does not exist in this schema or has a different kind")
         })?;
     let definition: String = row.get(1);
-    let definition = if matches!(kind, "view" | "materialized") {
-        view_definition(schema, row.get(0), kind, &definition, row.get(3))
+    let definition = if matches!(kind, ObjectKind::View | ObjectKind::Materialized) {
+        view_definition(
+            schema,
+            row.get(0),
+            kind == ObjectKind::Materialized,
+            &definition,
+            row.get(3),
+        )
     } else {
         definition
     };
@@ -211,7 +331,11 @@ pub async fn relation_definition(client: &Client, schema: &str, name: &str) -> A
         )
         .await?
         .ok_or_else(|| AppError::msg("view does not exist in this schema"))?;
-    object_definition(client, schema, relation_kind(row.get(1)), row.get(0)).await
+    let kind = match RelKind::from_code(row.get::<_, i8>(1) as u8) {
+        RelKind::Materialized => ObjectKind::Materialized,
+        _ => ObjectKind::View,
+    };
+    definition_of(client, schema, kind, row.get(0)).await
 }
 
 pub async fn refresh_materialized_view(client: &Client, schema: &str, name: &str) -> AppResult<()> {
@@ -249,23 +373,35 @@ pub struct Column {
     pub primary_key: bool,
 }
 
+/// The select list [`Column::from_row`] decodes. Expects `pg_attribute a`,
+/// its `pg_class c` and `LEFT JOIN pg_attrdef d` (see [`COLUMN_DEFAULT_JOIN`]).
+const COLUMN_FIELDS: &str = "a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+        pg_get_expr(d.adbin, d.adrelid),
+        EXISTS (SELECT 1 FROM pg_index i
+                WHERE i.indrelid = c.oid AND i.indisprimary
+                  AND a.attnum = ANY (i.indkey))";
+const COLUMN_DEFAULT_JOIN: &str =
+    "LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum";
+
+impl Column {
+    /// Decodes [`COLUMN_FIELDS`] starting at column `at` of `row`.
+    fn from_row(row: &tokio_postgres::Row, at: usize) -> Self {
+        Column {
+            name: row.get(at),
+            data_type: row.get(at + 1),
+            not_null: row.get(at + 2),
+            default: row.get(at + 3),
+            primary_key: row.get(at + 4),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletionTable {
     pub schema: String,
     pub name: String,
     pub columns: Vec<String>,
-}
-
-pub fn relation_kind(relkind: i8) -> &'static str {
-    match relkind as u8 {
-        b'r' => "table",
-        b'p' => "partitioned",
-        b'v' => "view",
-        b'm' => "materialized",
-        b'f' => "foreign",
-        _ => "other",
-    }
 }
 
 pub async fn server_version(client: &Client) -> AppResult<String> {
@@ -312,7 +448,7 @@ pub async fn relations(client: &Client, schema: &str) -> AppResult<Vec<Relation>
         .iter()
         .map(|r| Relation {
             name: r.get(0),
-            kind: relation_kind(r.get(1)),
+            kind: RelKind::from_code(r.get::<_, i8>(1) as u8),
             estimated_rows: r.get(2),
         })
         .collect())
@@ -321,30 +457,19 @@ pub async fn relations(client: &Client, schema: &str) -> AppResult<Vec<Relation>
 pub async fn columns(client: &Client, schema: &str, table: &str) -> AppResult<Vec<Column>> {
     let rows = client
         .query_typed(
-            "SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
-                    pg_get_expr(d.adbin, d.adrelid),
-                    EXISTS (SELECT 1 FROM pg_index i
-                            WHERE i.indrelid = c.oid AND i.indisprimary
-                              AND a.attnum = ANY (i.indkey))
-             FROM pg_attribute a
-             JOIN pg_class c ON c.oid = a.attrelid
-             JOIN pg_namespace n ON n.oid = c.relnamespace
-             LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-             WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
-             ORDER BY a.attnum",
+            &format!(
+                "SELECT {COLUMN_FIELDS}
+                 FROM pg_attribute a
+                 JOIN pg_class c ON c.oid = a.attrelid
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 {COLUMN_DEFAULT_JOIN}
+                 WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
+                 ORDER BY a.attnum"
+            ),
             &[(&schema, Type::NAME), (&table, Type::NAME)],
         )
         .await?;
-    Ok(rows
-        .iter()
-        .map(|r| Column {
-            name: r.get(0),
-            data_type: r.get(1),
-            not_null: r.get(2),
-            default: r.get(3),
-            primary_key: r.get(4),
-        })
-        .collect())
+    Ok(rows.iter().map(|r| Column::from_row(r, 0)).collect())
 }
 
 /// Tables and columns of all user schemas, for editor autocompletion.
@@ -378,7 +503,7 @@ pub async fn completion(client: &Client) -> AppResult<Vec<CompletionTable>> {
 #[serde(rename_all = "camelCase")]
 pub struct DiagramTable {
     pub name: String,
-    pub kind: &'static str,
+    pub kind: RelKind,
     pub columns: Vec<Column>,
 }
 
@@ -405,18 +530,16 @@ pub struct Diagram {
 pub async fn diagram(client: &Client, schema: &str) -> AppResult<Diagram> {
     let rows = client
         .query_typed(
-            "SELECT c.relname, c.relkind, a.attname, format_type(a.atttypid, a.atttypmod),
-                    a.attnotnull, pg_get_expr(d.adbin, d.adrelid),
-                    EXISTS (SELECT 1 FROM pg_index i
-                            WHERE i.indrelid = c.oid AND i.indisprimary
-                              AND a.attnum = ANY (i.indkey))
-             FROM pg_class c
-             JOIN pg_namespace n ON n.oid = c.relnamespace
-             JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-             LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-             WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-               AND NOT c.relispartition
-             ORDER BY c.relname, a.attnum",
+            &format!(
+                "SELECT c.relname, c.relkind, {COLUMN_FIELDS}
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                 {COLUMN_DEFAULT_JOIN}
+                 WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                   AND NOT c.relispartition
+                 ORDER BY c.relname, a.attnum"
+            ),
             &[(&schema, Type::NAME)],
         )
         .await?;
@@ -427,40 +550,29 @@ pub async fn diagram(client: &Client, schema: &str) -> AppResult<Diagram> {
         if tables.last().map(|t| &t.name) != Some(&name) {
             tables.push(DiagramTable {
                 name,
-                kind: relation_kind(r.get(1)),
+                kind: RelKind::from_code(r.get::<_, i8>(1) as u8),
                 columns: Vec::new(),
             });
         }
         if let Some(table) = tables.last_mut() {
-            table.columns.push(Column {
-                name: r.get(2),
-                data_type: r.get(3),
-                not_null: r.get(4),
-                default: r.get(5),
-                primary_key: r.get(6),
-            });
+            table.columns.push(Column::from_row(r, 2));
         }
     }
 
-    // Column lists keep the constraint's own order, which matters for
-    // composite keys.
     let rows = client
         .query_typed(
-            "SELECT con.conname, src.relname, dst.relname,
-                    array(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY k(attnum, i)
-                          JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
-                          ORDER BY k.i),
-                    array(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY k(attnum, i)
-                          JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum
-                          ORDER BY k.i)
-             FROM pg_constraint con
-             JOIN pg_class src ON src.oid = con.conrelid
-             JOIN pg_class dst ON dst.oid = con.confrelid
-             JOIN pg_namespace sn ON sn.oid = src.relnamespace
-             JOIN pg_namespace dn ON dn.oid = dst.relnamespace
-             WHERE con.contype = 'f' AND sn.nspname = $1 AND dn.nspname = $1
-               AND NOT src.relispartition
-             ORDER BY src.relname, con.conname",
+            &format!(
+                "SELECT con.conname, src.relname, dst.relname,
+                        {CONSTRAINT_COLUMNS}, {REFERENCED_COLUMNS}
+                 FROM pg_constraint con
+                 JOIN pg_class src ON src.oid = con.conrelid
+                 JOIN pg_class dst ON dst.oid = con.confrelid
+                 JOIN pg_namespace sn ON sn.oid = src.relnamespace
+                 JOIN pg_namespace dn ON dn.oid = dst.relnamespace
+                 WHERE con.contype = 'f' AND sn.nspname = $1 AND dn.nspname = $1
+                   AND NOT src.relispartition
+                 ORDER BY src.relname, con.conname"
+            ),
             &[(&schema, Type::NAME)],
         )
         .await?;
@@ -487,10 +599,32 @@ mod tests {
 
     #[test]
     fn relkinds() {
-        assert_eq!(relation_kind(b'r' as i8), "table");
-        assert_eq!(relation_kind(b'v' as i8), "view");
-        assert_eq!(relation_kind(b'm' as i8), "materialized");
-        assert_eq!(relation_kind(b'S' as i8), "other");
+        assert_eq!(RelKind::from_code(b'r'), "table");
+        assert_eq!(RelKind::from_code(b'v'), "view");
+        assert_eq!(RelKind::from_code(b'm'), "materialized");
+        assert_eq!(RelKind::from_code(b'S'), "other");
+        for (code, wire) in [
+            (b'r', "table"),
+            (b'p', "partitioned"),
+            (b'v', "view"),
+            (b'm', "materialized"),
+            (b'f', "foreign"),
+            (b'S', "other"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(RelKind::from_code(code)).unwrap(),
+                wire
+            );
+        }
+    }
+
+    #[test]
+    fn object_kinds_round_trip_their_wire_names() {
+        for kind in ObjectKind::ALL {
+            assert_eq!(kind.as_str().parse::<ObjectKind>().unwrap(), kind);
+        }
+        assert!("table".parse::<ObjectKind>().is_err());
+        assert!("Function".parse::<ObjectKind>().is_err());
     }
 
     #[test]
@@ -509,17 +643,17 @@ mod tests {
     #[test]
     fn view_definitions_quote_names_and_never_drop_materialized_views() {
         assert_eq!(
-            view_definition("a\"b", "View Name", "view", " SELECT 1;\n", ""),
+            view_definition("a\"b", "View Name", false, " SELECT 1;\n", ""),
             "CREATE OR REPLACE VIEW \"a\"\"b\".\"View Name\" AS\n SELECT 1"
         );
-        let sql = view_definition("s", "m", "materialized", "SELECT 1;", "");
+        let sql = view_definition("s", "m", true, "SELECT 1;", "");
         assert!(sql.contains("CREATE MATERIALIZED VIEW \"s\".\"m\" AS\nSELECT 1"));
         assert!(!sql.contains("DROP"));
         assert!(!sql.contains("OR REPLACE"));
         let sql = view_definition(
             "s",
             "v",
-            "view",
+            false,
             "SELECT 1",
             "security_barrier = 'true', check_option = 'local'",
         );

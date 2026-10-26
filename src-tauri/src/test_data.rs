@@ -99,9 +99,7 @@ pub async fn insert_test_data(
     count: u32,
     expected_sql: String,
 ) -> AppResult<u64> {
-    if manager.store.get(&id)?.read_only {
-        return Err(AppError::msg("This connection is read-only."));
-    }
+    manager.ensure_writable(&id)?;
     let conn = manager.open(&id, &database).await?;
     let sql = preview(&conn.client, &schema, &table, count).await?;
     if sql != expected_sql {

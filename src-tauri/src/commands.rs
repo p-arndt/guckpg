@@ -48,7 +48,8 @@ pub async fn save_connection(
         config.id = uuid::Uuid::new_v4().to_string();
     }
     config.validate()?;
-    config::store_secrets(&config.id, &secrets)?;
+    let previous = manager.store.get(&config.id).ok();
+    config::store_secrets_for(&config, previous.as_ref(), &secrets)?;
     manager.store.upsert(config.clone())?;
     // Open sessions still use the old settings.
     manager.disconnect(&config.id).await;
@@ -140,60 +141,6 @@ pub async fn list_roles(manager: State<'_, Manager>, id: String) -> AppResult<Ve
     catalog::roles(&conn.client).await
 }
 
-fn create_role_sql(
-    name: &str,
-    password: Option<&str>,
-    login: bool,
-    create_db: bool,
-    create_role: bool,
-) -> AppResult<String> {
-    if name.is_empty()
-        || name.len() > 63
-        || name.contains('\0')
-        || password.is_some_and(|p| p.is_empty() || p.contains('\0'))
-    {
-        return Err(AppError::msg("Invalid role name or password."));
-    }
-    let mut sql = format!(
-        "CREATE ROLE {} {} {} {}",
-        crate::sql::quote_ident(name),
-        if login { "LOGIN" } else { "NOLOGIN" },
-        if create_db { "CREATEDB" } else { "NOCREATEDB" },
-        if create_role {
-            "CREATEROLE"
-        } else {
-            "NOCREATEROLE"
-        }
-    );
-    if let Some(password) = password {
-        sql.push_str(&format!(
-            " PASSWORD {}",
-            crate::sql::quote_literal(password)
-        ));
-    }
-    Ok(sql)
-}
-
-#[tauri::command]
-pub async fn create_role(
-    manager: State<'_, Manager>,
-    id: String,
-    name: String,
-    password: Option<String>,
-    login: bool,
-    create_db: bool,
-    create_role: bool,
-) -> AppResult<()> {
-    if manager.store.get(&id)?.read_only {
-        return Err(AppError::msg("This connection is configured as read-only."));
-    }
-    let sql = create_role_sql(&name, password.as_deref(), login, create_db, create_role)?;
-    let database = manager.store.get(&id)?.database;
-    let conn = manager.ephemeral(&id, &database).await?;
-    conn.client.batch_execute(&sql).await.map_err(|_| AppError::msg("Could not create the role. Check your permissions and whether the name already exists."))?;
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn list_schemas(
     manager: State<'_, Manager>,
@@ -260,10 +207,11 @@ pub async fn refresh_materialized_view(
     schema: String,
     name: String,
 ) -> AppResult<()> {
-    if manager.store.get(&id)?.read_only {
-        return Err(AppError::msg("This connection is read-only"));
-    }
-    let conn = manager.meta(&id, &database).await?;
+    manager.ensure_writable(&id)?;
+    // REFRESH can run for minutes and waits for an exclusive lock; on the
+    // tree's shared connection that would freeze the whole sidebar.
+    let conn = manager.open(&id, &database).await?;
+    conn.client.batch_execute("SET lock_timeout = '2s'").await?;
     catalog::refresh_materialized_view(&conn.client, &schema, &name).await
 }
 
@@ -327,16 +275,22 @@ pub async fn browse_table(
     tab_id: String,
     id: String,
     database: String,
-    request: BrowseRequest,
+    mut request: BrowseRequest,
 ) -> AppResult<BrowseOutput> {
-    let sql = browse_sql(&request);
+    request.limit = request.limit.min(MAX_ROWS_LIMIT as u32);
+    let order = {
+        let meta = manager.meta(&id, &database).await?;
+        editing::row_order(&meta.client, &request.schema, &request.table).await?
+    };
+    let sql = browse_sql(&request, &order);
     let conn = manager.tab(&tab_id, &id, &database).await?;
     let output = conn.run_editable(&sql, request.limit as usize).await?;
     Ok(BrowseOutput { sql, output })
 }
 
-/// Save grid edits. Runs on the tree's connection, which is never inside a
-/// transaction the user opened in an editor tab.
+/// Save grid edits. Runs on its own connection: never inside a transaction
+/// the user opened in an editor tab, and never sharing a transaction with
+/// another save or blocking the tree while it waits for row locks.
 #[tauri::command]
 pub async fn apply_changes(
     manager: State<'_, Manager>,
@@ -346,10 +300,8 @@ pub async fn apply_changes(
     table: String,
     changes: Vec<Change>,
 ) -> AppResult<usize> {
-    if manager.store.get(&id)?.read_only {
-        return Err(AppError::msg("This connection is read-only"));
-    }
-    let conn = manager.meta(&id, &database).await?;
+    manager.ensure_writable(&id)?;
+    let conn = manager.open(&id, &database).await?;
     editing::apply(&conn.client, &schema, &table, &changes).await
 }
 
@@ -375,20 +327,4 @@ pub async fn cancel_query(manager: State<'_, Manager>, tab_id: String) -> AppRes
 pub async fn close_tab(manager: State<'_, Manager>, tab_id: String) -> AppResult<()> {
     manager.close_tab(&tab_id).await;
     Ok(())
-}
-
-#[cfg(test)]
-mod role_tests {
-    use super::create_role_sql;
-
-    #[test]
-    fn creates_roles_with_quoted_values_and_explicit_privileges() {
-        assert_eq!(
-            create_role_sql("a\"b", Some("a'b\\c"), true, false, true).unwrap(),
-            "CREATE ROLE \"a\"\"b\" LOGIN NOCREATEDB CREATEROLE PASSWORD E'a''b\\\\c'"
-        );
-        assert!(create_role_sql("", None, true, false, false).is_err());
-        assert!(create_role_sql(&"a".repeat(64), None, true, false, false).is_err());
-        assert!(create_role_sql("role", Some("bad\0password"), true, false, false).is_err());
-    }
 }

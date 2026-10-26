@@ -5,6 +5,7 @@
 //! container names usually do not resolve there, so when the server cannot
 //! connect to a name we ask Docker on the server for the container's IP.
 
+use std::future::Future;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -21,6 +22,33 @@ use crate::config::{ResolvedSecrets, SshAuth, SshConfig};
 use crate::error::{AppError, AppResult};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Connect plus authentication; agent keys may need a confirmation click.
+const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
+const EXEC_TIMEOUT: Duration = Duration::from_secs(15);
+/// Longer than `EXEC_TIMEOUT`: opening a stream may include a Docker lookup.
+const CHANNEL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `fut`, or the error from `message` once `limit` has passed.
+async fn within<T>(
+    limit: Duration,
+    message: impl FnOnce() -> String,
+    fut: impl Future<Output = AppResult<T>>,
+) -> AppResult<T> {
+    tokio::time::timeout(limit, fut)
+        .await
+        .unwrap_or_else(|_| Err(AppError::msg(message())))
+}
+
+/// Reading the key and running its KDF (bcrypt for encrypted OpenSSH keys
+/// takes a noticeable fraction of a second) must not stall a runtime worker.
+async fn load_key(
+    path: PathBuf,
+    passphrase: Option<String>,
+) -> Result<russh::keys::PrivateKey, russh::keys::Error> {
+    tokio::task::spawn_blocking(move || russh::keys::load_secret_key(&path, passphrase.as_deref()))
+        .await
+        .unwrap_or_else(|e| Err(std::io::Error::other(e).into()))
+}
 
 /// Paths of the known_hosts files we consult. The user's own file is read
 /// but never written; keys the user accepts in guckpg go to the app's file.
@@ -74,6 +102,20 @@ impl KnownHosts {
     pub fn trust(&self, host: &str, port: u16, openssh_key: &str) -> AppResult<()> {
         let key = PublicKey::from_openssh(openssh_key)
             .map_err(|e| AppError::msg(format!("SSH key: {e}")))?;
+        // russh creates the file with the default umask; create it private
+        // first so it is never readable by others, even briefly.
+        if let Some(dir) = self.app_file.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.append(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        drop(options.open(&self.app_file)?);
+        crate::config::restrict_permissions(&self.app_file)?;
         learn_known_hosts_path(host, port, &key, &self.app_file)?;
         Ok(())
     }
@@ -121,7 +163,23 @@ pub struct Tunnel {
 }
 
 impl Tunnel {
+    /// Connect and authenticate. Bounded as a whole: a server that accepts
+    /// TCP but stalls during the handshake or authentication must not leave
+    /// the caller (and everyone waiting for this tunnel) hanging.
     pub async fn open(
+        ssh: &SshConfig,
+        secrets: &ResolvedSecrets,
+        known_hosts: KnownHosts,
+    ) -> AppResult<Tunnel> {
+        within(
+            OPEN_TIMEOUT,
+            || format!("SSH: timed out logging in to {}@{}", ssh.user, ssh.host),
+            Self::handshake(ssh, secrets, known_hosts),
+        )
+        .await
+    }
+
+    async fn handshake(
         ssh: &SshConfig,
         secrets: &ResolvedSecrets,
         known_hosts: KnownHosts,
@@ -166,7 +224,8 @@ impl Tunnel {
             }
             SshAuth::Key { key_path } => {
                 let path = expand_home(key_path);
-                let key = russh::keys::load_secret_key(&path, secrets.ssh_passphrase.as_deref())
+                let key = load_key(path.clone(), secrets.ssh_passphrase.clone())
+                    .await
                     .map_err(|e| match e {
                         russh::keys::Error::KeyIsEncrypted => {
                             AppError::msg("SSH key is encrypted: enter its passphrase")
@@ -201,6 +260,15 @@ impl Tunnel {
 
     /// Open a byte stream to `host:port` as seen from the SSH server.
     pub async fn open_stream(&self, host: &str, port: u16) -> AppResult<ChannelStream<Msg>> {
+        within(
+            CHANNEL_TIMEOUT,
+            || format!("SSH: timed out opening a channel to {host}:{port}"),
+            self.stream(host, port),
+        )
+        .await
+    }
+
+    async fn stream(&self, host: &str, port: u16) -> AppResult<ChannelStream<Msg>> {
         let cached = self
             .resolved
             .lock()
@@ -237,6 +305,15 @@ impl Tunnel {
     /// Run a command on the SSH server and return stdout; fails on a non-zero
     /// exit status with stderr as the message.
     pub async fn exec(&self, command: &str) -> AppResult<String> {
+        within(
+            EXEC_TIMEOUT,
+            || format!("SSH: timed out running `{command}`"),
+            self.run(command),
+        )
+        .await
+    }
+
+    async fn run(&self, command: &str) -> AppResult<String> {
         let mut channel = self.handle.channel_open_session().await?;
         channel.exec(true, command).await?;
         let (mut stdout, mut stderr, mut status) = (Vec::new(), Vec::new(), None);
@@ -332,7 +409,7 @@ async fn authenticate_auto(
             continue;
         }
         let shown = format!("~/.ssh/{}", path.file_name().unwrap_or_default().display());
-        let key = match russh::keys::load_secret_key(&path, passphrase) {
+        let key = match load_key(path.clone(), passphrase.map(String::from)).await {
             Ok(key) => key,
             Err(russh::keys::Error::KeyIsEncrypted) => {
                 tried.push(format!("{shown} (needs its passphrase)"));
@@ -514,5 +591,29 @@ mod tests {
         kh.check("vps.example", 22, &key).unwrap();
         // The port is part of the identity.
         assert!(kh.check("vps.example", 2222, &key).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&kh.app_file)
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    #[tokio::test]
+    async fn within_bounds_a_stalled_future() {
+        let stalled = within(
+            Duration::from_millis(20),
+            || "too slow".into(),
+            std::future::pending::<AppResult<()>>(),
+        )
+        .await;
+        assert_eq!(stalled.unwrap_err().to_string(), "too slow");
+
+        let quick = within(Duration::from_secs(5), || unreachable!(), async { Ok(1) }).await;
+        assert_eq!(quick.unwrap(), 1);
     }
 }

@@ -76,7 +76,7 @@ impl Default for AiConfig {
 
 impl AiConfig {
     pub fn validate(&self) -> AppResult<()> {
-        self.url()?;
+        self.request_url()?;
         if self.model.trim().is_empty() || self.model.len() > 512 {
             return Err(AppError::msg(
                 "Enter an AI model name (at most 512 characters).",
@@ -111,6 +111,19 @@ impl AiConfig {
         Ok(url)
     }
 
+    /// The URL requests may be sent to. Credentials must not travel in clear text, so
+    /// plain HTTP is accepted only for endpoints on this machine. Stored configs are not
+    /// rejected on load, so the user can still open and correct them.
+    pub fn request_url(&self) -> AppResult<reqwest::Url> {
+        let url = self.url()?;
+        if url.scheme() == "http" && !is_loopback(&url) {
+            return Err(AppError::msg(
+                "AI provider URL must use HTTPS unless it points to this computer (localhost).",
+            ));
+        }
+        Ok(url)
+    }
+
     fn account(&self) -> AppResult<String> {
         let endpoint = self.url()?.to_string();
         Ok(format!(
@@ -119,6 +132,18 @@ impl AiConfig {
             endpoint.trim_end_matches('/')
         ))
     }
+}
+
+fn is_loopback(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -334,6 +359,38 @@ mod tests {
             config.base_url = url.into();
             let error = config.validate().unwrap_err().to_string();
             assert!(!error.contains("secret"));
+        }
+    }
+
+    #[test]
+    fn plain_http_is_limited_to_loopback_hosts() {
+        let mut config = AiConfig {
+            model: "local-model".into(),
+            ..Default::default()
+        };
+        for url in [
+            "http://localhost:11434",
+            "http://LOCALHOST:11434/",
+            "http://127.0.0.1:8080/v1",
+            "http://127.1.2.3",
+            "http://[::1]:11434",
+            "https://api.example.com/v1",
+            "https://192.168.1.10:11434",
+        ] {
+            config.base_url = url.into();
+            assert!(config.validate().is_ok(), "{url}");
+        }
+        for url in [
+            "http://api.example.com/v1",
+            "http://192.168.1.10:11434",
+            "http://[fe80::1]:11434",
+            "http://localhost.example.com",
+            "http://0.0.0.0:11434",
+        ] {
+            config.base_url = url.into();
+            assert!(config.validate().is_err(), "{url}");
+            // Remote HTTP configs stay loadable so the user can correct them.
+            assert!(config.url().is_ok(), "{url}");
         }
     }
 

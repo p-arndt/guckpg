@@ -7,6 +7,7 @@ mod csv_transfer;
 mod editing;
 mod error;
 mod explain;
+mod guard;
 #[cfg(test)]
 mod it;
 mod pg;
@@ -16,21 +17,28 @@ mod sql;
 mod ssh;
 mod structure;
 mod test_data;
+#[cfg(test)]
+mod testutil;
 mod vault;
 
 use tauri::Manager as _;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // One process-wide provider, so no rustls user depends on another having
+    // installed it first. Fails only if one is already installed.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(if cfg!(debug_assertions) {
+                        log::LevelFilter::Info
+                    } else {
+                        log::LevelFilter::Warn
+                    })
+                    .build(),
+            )?;
             let dir = app.path().app_config_dir()?;
             vault::init(&dir)?;
             app.manage(ai::AiState::new(&dir));
@@ -66,7 +74,7 @@ pub fn run() {
             commands::disconnect,
             commands::list_databases,
             commands::list_roles,
-            commands::create_role,
+            roles::create_role,
             commands::list_schemas,
             commands::list_relations,
             commands::list_objects,
@@ -91,6 +99,12 @@ pub fn run() {
             roles::apply_role_changes,
             roles::drop_role,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running guckpg");
+        .build(tauri::generate_context!())
+        .expect("error while running guckpg")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                let manager = app.state::<session::Manager>();
+                tauri::async_runtime::block_on(manager.shutdown());
+            }
+        });
 }

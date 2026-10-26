@@ -1,7 +1,12 @@
 //! SQL text built by guckpg itself. Every identifier from the UI goes through
 //! `quote_ident`, so table or column names can never inject SQL.
 
+use std::future::Future;
+
 use serde::Deserialize;
+use tokio_postgres::Client;
+
+use crate::error::{AppError, AppResult};
 
 pub fn quote_ident(ident: &str) -> String {
     format!("\"{}\"", ident.replace('"', "\"\""))
@@ -23,11 +28,52 @@ pub fn quote_literal(value: &str) -> String {
     }
 }
 
-fn literal_or_null(value: &Option<String>) -> String {
-    value
-        .as_deref()
-        .map(quote_literal)
-        .unwrap_or_else(|| "NULL".into())
+/// `quote_literal`, or the keyword `NULL` for a missing value.
+pub fn literal_or_null(value: Option<&str>) -> String {
+    value.map(quote_literal).unwrap_or_else(|| "NULL".into())
+}
+
+/// Postgres silently truncates identifiers longer than 63 bytes, which
+/// would make guckpg act on a different name than the user typed, and NUL
+/// cannot be sent at all.
+pub fn checked_ident(name: &str) -> AppResult<&str> {
+    if name.is_empty() || name.len() > 63 || name.contains('\0') {
+        return Err(AppError::msg(
+            "Invalid name: names must be 1 to 63 bytes long and must not contain NUL.",
+        ));
+    }
+    Ok(name)
+}
+
+/// Opens a write transaction that fails fast instead of queueing behind a
+/// lock held by an editor tab, and that cannot run unbounded.
+pub const BEGIN_GUARDED: &str =
+    "BEGIN; SET LOCAL lock_timeout = '2s'; SET LOCAL statement_timeout = '60s'";
+
+/// Run `body` inside a transaction opened with `begin_sql` (usually
+/// `BEGIN_GUARDED`): COMMIT when it returns Ok, ROLLBACK when it returns Err.
+///
+/// Use a connection nobody else shares (`Manager::open`): Postgres has one
+/// transaction per connection, so concurrent callers on a shared client
+/// would interleave their statements and roll back each other's work. If the
+/// returned future is dropped midway, the transaction stays open until the
+/// connection closes, which is another reason for a dedicated connection.
+pub async fn in_tx<T, F, Fut>(client: &Client, begin_sql: &str, body: F) -> AppResult<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = AppResult<T>>,
+{
+    client.batch_execute(begin_sql).await?;
+    match body().await {
+        Ok(value) => {
+            client.batch_execute("COMMIT").await?;
+            Ok(value)
+        }
+        Err(err) => {
+            let _ = client.batch_execute("ROLLBACK").await;
+            Err(err)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -79,7 +125,13 @@ pub fn change_sql(schema: &str, table: &str, change: &Change) -> Result<String, 
             }
             let set = values
                 .iter()
-                .map(|v| format!("{} = {}", quote_ident(&v.column), literal_or_null(&v.value)))
+                .map(|v| {
+                    format!(
+                        "{} = {}",
+                        quote_ident(&v.column),
+                        literal_or_null(v.value.as_deref())
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             Ok(format!(
@@ -104,7 +156,7 @@ pub fn change_sql(schema: &str, table: &str, change: &Change) -> Result<String, 
                 .join(", ");
             let vals = values
                 .iter()
-                .map(|v| literal_or_null(&v.value))
+                .map(|v| literal_or_null(v.value.as_deref()))
                 .collect::<Vec<_>>()
                 .join(", ");
             Ok(format!("INSERT INTO {target} ({cols}) VALUES ({vals})"))
@@ -145,7 +197,20 @@ pub struct BrowseRequest {
     pub offset: u64,
 }
 
-pub fn browse_sql(req: &BrowseRequest) -> String {
+/// What makes the browse order total, so LIMIT/OFFSET pages neither repeat
+/// nor skip rows when the requested sort has ties.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowOrder {
+    /// Primary key column names, in key order.
+    Key(Vec<String>),
+    /// No primary key, but physical rows (tables, matviews): `tableoid, ctid`
+    /// is unique even across partitions and inheritance children.
+    Physical,
+    /// Views and foreign tables have nothing unique to order by.
+    Unknown,
+}
+
+pub fn browse_sql(req: &BrowseRequest, order: &RowOrder) -> String {
     let mut sql = format!("SELECT * FROM {}", qualified(&req.schema, &req.table));
     if let Some(filter) = &req.filter {
         sql.push_str(&format!(
@@ -154,12 +219,31 @@ pub fn browse_sql(req: &BrowseRequest) -> String {
             quote_literal(&filter.value)
         ));
     }
+    let mut terms = Vec::new();
     if let Some(sort) = &req.sort {
         let dir = match sort.dir {
             SortDir::Asc => "ASC",
             SortDir::Desc => "DESC",
         };
-        sql.push_str(&format!(" ORDER BY {} {dir}", quote_ident(&sort.column)));
+        terms.push(format!("{} {dir}", quote_ident(&sort.column)));
+    }
+    let sort_column = req.sort.as_ref().map(|s| s.column.as_str());
+    match order {
+        RowOrder::Key(columns) => terms.extend(
+            columns
+                .iter()
+                .filter(|c| Some(c.as_str()) != sort_column)
+                .map(|c| quote_ident(c)),
+        ),
+        // Ordering an unsorted heap by ctid would read the whole table for
+        // every page; only pay for it when the user's sort needs a sort anyway.
+        RowOrder::Physical if sort_column.is_some() => {
+            terms.extend(["tableoid".to_string(), "ctid".to_string()]);
+        }
+        RowOrder::Physical | RowOrder::Unknown => {}
+    }
+    if !terms.is_empty() {
+        sql.push_str(&format!(" ORDER BY {}", terms.join(", ")));
     }
     sql.push_str(&format!(" LIMIT {} OFFSET {}", req.limit, req.offset));
     sql
@@ -277,8 +361,18 @@ mod tests {
             offset: 200,
         };
         assert_eq!(
-            browse_sql(&req),
+            browse_sql(&req, &RowOrder::Unknown),
             r#"SELECT * FROM "public"."users" LIMIT 100 OFFSET 200"#
+        );
+        // Without a sort, an unkeyed heap is not sorted: that would scan the
+        // whole table for every page.
+        assert_eq!(
+            browse_sql(&req, &RowOrder::Physical),
+            r#"SELECT * FROM "public"."users" LIMIT 100 OFFSET 200"#
+        );
+        assert_eq!(
+            browse_sql(&req, &RowOrder::Key(vec!["tenant".into(), "i\"d".into()])),
+            r#"SELECT * FROM "public"."users" ORDER BY "tenant", "i""d" LIMIT 100 OFFSET 200"#
         );
     }
 
@@ -289,18 +383,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            browse_sql(&req),
+            browse_sql(&req, &RowOrder::Unknown),
             r#"SELECT * FROM "app"."Order" ORDER BY "created_at" DESC LIMIT 50 OFFSET 0"#
         );
     }
+
+    #[test]
+    fn browse_sort_gets_a_unique_tie_breaker() {
+        let req: BrowseRequest = serde_json::from_str(
+            r#"{"schema":"app","table":"t","sort":{"column":"name","dir":"asc"},"limit":50,"offset":50}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            browse_sql(&req, &RowOrder::Key(vec!["id".into()])),
+            r#"SELECT * FROM "app"."t" ORDER BY "name" ASC, "id" LIMIT 50 OFFSET 50"#
+        );
+        assert_eq!(
+            browse_sql(&req, &RowOrder::Physical),
+            r#"SELECT * FROM "app"."t" ORDER BY "name" ASC, tableoid, ctid LIMIT 50 OFFSET 50"#
+        );
+        // Sorting by a key column does not repeat it.
+        assert_eq!(
+            browse_sql(&req, &RowOrder::Key(vec!["name".into(), "id".into()])),
+            r#"SELECT * FROM "app"."t" ORDER BY "name" ASC, "id" LIMIT 50 OFFSET 50"#
+        );
+    }
+
     #[test]
     fn browse_filter_quotes_identifiers_and_literal_without_wildcards() {
         let req: BrowseRequest = serde_json::from_str(
             r#"{"schema":"public","table":"users","filter":{"column":"name\"x","value":"a'%_\\b"},"limit":10,"offset":0}"#,
         ).unwrap();
         assert_eq!(
-            browse_sql(&req),
+            browse_sql(&req, &RowOrder::Unknown),
             r#"SELECT * FROM "public"."users" WHERE strpos(lower("name""x"::text), lower(E'a''%_\\b')) > 0 LIMIT 10 OFFSET 0"#
         );
+    }
+
+    #[test]
+    fn literal_or_null_handles_missing_values() {
+        assert_eq!(literal_or_null(None), "NULL");
+        assert_eq!(literal_or_null(Some("NULL")), "'NULL'");
+        assert_eq!(literal_or_null(Some("it's")), "'it''s'");
+    }
+
+    #[test]
+    fn checks_identifier_length_and_nul() {
+        assert_eq!(checked_ident("users").unwrap(), "users");
+        assert!(checked_ident(&"a".repeat(63)).is_ok());
+        assert!(checked_ident(&"a".repeat(64)).is_err());
+        // 63 bytes, not 63 characters: 32 two-byte chars are 64 bytes.
+        assert!(checked_ident(&"ä".repeat(32)).is_err());
+        assert!(checked_ident("").is_err());
+        assert!(checked_ident("a\0b").is_err());
     }
 }

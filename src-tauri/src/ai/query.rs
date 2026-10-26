@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_postgres::types::{ToSql, Type};
 
-use crate::error::{AppError, AppResult};
+use super::tools::{ToolError, rejected};
 use crate::pg::PgConn;
 use crate::sql::{qualified, quote_ident};
 
@@ -14,11 +14,12 @@ const MAX_ROWS: usize = 100;
 const MAX_COLUMNS: usize = 32;
 const MAX_JOINS: usize = 3;
 const MAX_FILTERS: usize = 16;
+const MAX_OFFSET: usize = 10_000;
+const MAX_IDENTIFIER_BYTES: usize = 63;
+const MAX_VALUE_BYTES: usize = 1024;
 const CELL_CHARS: usize = 1025;
 
-fn rejected(message: &str) -> AppError {
-    AppError::msg(format!("AI query: {message}"))
-}
+type QueryResult<T> = Result<T, ToolError>;
 
 #[derive(Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -129,34 +130,36 @@ fn object(properties: Value) -> Value {
 }
 
 pub(super) fn definition() -> Value {
-    let identifier = json!({"type":"string", "minLength":1, "maxLength":63});
-    let column =
-        object(json!({"table":{"type":"integer","minimum":0,"maximum":3}, "column":identifier}));
+    let identifier = json!({"type":"string", "minLength":1, "maxLength":MAX_IDENTIFIER_BYTES});
+    let column = object(json!({
+        "table":{"type":"integer","minimum":0,"maximum":MAX_JOINS},
+        "column":identifier
+    }));
     let nullable_column = json!({"anyOf":[column, {"type":"null"}]});
+    let array = |max: usize, items: Value| json!({"type":"array","maxItems":max,"items":items});
+    let filter = object(json!({
+        "column":column,"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","like","is_null","is_not_null"]},
+        "value":{"type":["string","null"],"maxLength":MAX_VALUE_BYTES}
+    }));
+    let filter_group = json!({"type":"array","minItems":1,"maxItems":MAX_FILTERS,"items":filter});
     let parameters = object(json!({
         "schema":identifier, "table":identifier,
-        "columns":{"type":"array","maxItems":32,"items":column},
-        "joins":{"type":"array","maxItems":3,"items":object(json!({
+        "columns":array(MAX_COLUMNS, column.clone()),
+        "joins":array(MAX_JOINS, object(json!({
             "schema":identifier,"table":identifier,"kind":{"type":"string","enum":["inner","left"]},
             "left":column,"rightColumn":identifier
-        }))},
-        "filters":{"type":"array","maxItems":16,"items":object(json!({
-            "column":column,"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","like","is_null","is_not_null"]},
-            "value":{"type":["string","null"],"maxLength":1024}
-        }))},
-        "filterGroups":{"type":"array","maxItems":16,"items":{"type":"array","minItems":1,"maxItems":16,"items":object(json!({
-            "column":column,"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","like","is_null","is_not_null"]},
-            "value":{"type":["string","null"],"maxLength":1024}
-        }))}},
-        "aggregates":{"type":"array","maxItems":32,"items":object(json!({
+        }))),
+        "filters":array(MAX_FILTERS, filter),
+        "filterGroups":array(MAX_FILTERS, filter_group),
+        "aggregates":array(MAX_COLUMNS, object(json!({
             "function":{"type":"string","enum":["count","sum","avg","min","max"]},"column":nullable_column,"distinct":{"type":"boolean"}
-        }))},
-        "groupBy":{"type":"array","maxItems":32,"items":column},
-        "orderBy":{"type":"array","maxItems":32,"items":object(json!({
-            "field":{"type":"integer","minimum":0,"maximum":31},"direction":{"type":"string","enum":["asc","desc"]}
-        }))},
-        "limit":{"type":"integer","minimum":1,"maximum":100},
-        "offset":{"type":"integer","minimum":0,"maximum":10000}
+        }))),
+        "groupBy":array(MAX_COLUMNS, column),
+        "orderBy":array(MAX_COLUMNS, object(json!({
+            "field":{"type":"integer","minimum":0,"maximum":MAX_COLUMNS - 1},"direction":{"type":"string","enum":["asc","desc"]}
+        }))),
+        "limit":{"type":"integer","minimum":1,"maximum":MAX_ROWS},
+        "offset":{"type":"integer","minimum":0,"maximum":MAX_OFFSET}
     }));
     json!({"type":"function","function":{
         "name":"query_rows",
@@ -165,22 +168,22 @@ pub(super) fn definition() -> Value {
     }})
 }
 
-fn identifier(value: &str) -> AppResult<()> {
-    if value.is_empty() || value.len() > 63 || value.contains('\0') {
-        return Err(rejected(
-            "identifiers must contain 1–63 UTF-8 bytes without NUL",
-        ));
+fn identifier(value: &str) -> QueryResult<()> {
+    if value.is_empty() || value.len() > MAX_IDENTIFIER_BYTES || value.contains('\0') {
+        return Err(rejected(format!(
+            "identifiers must contain 1–{MAX_IDENTIFIER_BYTES} UTF-8 bytes without NUL"
+        )));
     }
     Ok(())
 }
 
 impl Query {
-    pub(super) fn parse(value: &Value) -> AppResult<Self> {
+    pub(super) fn parse(value: &Value) -> QueryResult<Self> {
         if value.to_string().len() > 32 * 1024 {
             return Err(rejected("query plan exceeds 32 KiB"));
         }
         let query: Self = serde_json::from_value(value.clone())
-            .map_err(|error| rejected(&format!("invalid query plan: {error}")))?;
+            .map_err(|error| rejected(format!("invalid query plan: {error}")))?;
         query.validate()?;
         Ok(query)
     }
@@ -195,7 +198,7 @@ impl Query {
             .collect()
     }
 
-    fn validate(&self) -> AppResult<()> {
+    fn validate(&self) -> QueryResult<()> {
         let fields = self.columns.len() + self.aggregates.len();
         if fields == 0 {
             return Err(rejected(
@@ -211,11 +214,11 @@ impl Query {
             || self.order_by.len() > MAX_COLUMNS
             || self.limit == 0
             || self.limit > MAX_ROWS
-            || self.offset > 10_000
+            || self.offset > MAX_OFFSET
         {
-            return Err(rejected(
-                "limits: at most 32 selected columns and aggregates, 3 joins, 16 filters, 32 groups and sorts; limit 1–100, offset 0–10000",
-            ));
+            return Err(rejected(format!(
+                "limits: at most {MAX_COLUMNS} selected columns and aggregates, {MAX_JOINS} joins, {MAX_FILTERS} filters, {MAX_COLUMNS} groups and sorts; limit 1–{MAX_ROWS}, offset 0–{MAX_OFFSET}"
+            )));
         }
         for (schema, table) in self.tables() {
             identifier(schema)?;
@@ -224,7 +227,7 @@ impl Query {
                 return Err(rejected("system schemas cannot be queried"));
             }
         }
-        let check = |column: &ColumnRef| -> AppResult<()> {
+        let check = |column: &ColumnRef| -> QueryResult<()> {
             identifier(&column.column)?;
             if column.table > self.joins.len() {
                 return Err(rejected("column references an unknown table"));
@@ -255,7 +258,7 @@ impl Query {
                 || filter
                     .value
                     .as_ref()
-                    .is_some_and(|v| v.len() > 1024 || v.contains('\0'))
+                    .is_some_and(|v| v.len() > MAX_VALUE_BYTES || v.contains('\0'))
             {
                 return Err(rejected(
                     "invalid filter value; use is_null/is_not_null for NULL",
@@ -312,7 +315,11 @@ fn builtin_type(oid: u32) -> Option<&'static str> {
     })
 }
 
-pub(super) async fn table_columns(conn: &PgConn, schema: &str, table: &str) -> AppResult<Columns> {
+pub(super) async fn table_columns(
+    conn: &PgConn,
+    schema: &str,
+    table: &str,
+) -> QueryResult<Columns> {
     identifier(schema)?;
     identifier(table)?;
     if schema.starts_with("pg_") || schema == "information_schema" {
@@ -367,10 +374,15 @@ struct Compiled {
     columns: Vec<String>,
 }
 
-fn compile(query: &Query, tables: &[Columns]) -> AppResult<Compiled> {
-    query.validate()?;
-    let resolve = |column: &ColumnRef| -> AppResult<(String, &'static str)> {
-        let kind = tables
+/// Resolves column references against the checked columns of each referenced table.
+struct Resolver<'a> {
+    tables: &'a [Columns],
+}
+
+impl Resolver<'_> {
+    fn resolve(&self, column: &ColumnRef) -> QueryResult<(String, &'static str)> {
+        let kind = self
+            .tables
             .get(column.table)
             .and_then(|t| t.get(&column.column))
             .ok_or_else(|| {
@@ -382,11 +394,19 @@ fn compile(query: &Query, tables: &[Columns]) -> AppResult<Compiled> {
             format!("t{}.{}", column.table, quote_ident(&column.column)),
             *kind,
         ))
-    };
+    }
+
+    fn expression(&self, column: &ColumnRef) -> QueryResult<String> {
+        self.resolve(column).map(|(expression, _)| expression)
+    }
+}
+
+/// Selected expressions and their output column names, columns before aggregates.
+fn projection(query: &Query, resolver: &Resolver) -> QueryResult<(Vec<String>, Vec<String>)> {
     let mut expressions = Vec::new();
     let mut columns = Vec::new();
     for column in &query.columns {
-        expressions.push(resolve(column)?.0);
+        expressions.push(resolver.expression(column)?);
         columns.push(format!("t{}_{}", column.table, column.column));
     }
     for aggregate in &query.aggregates {
@@ -398,7 +418,7 @@ fn compile(query: &Query, tables: &[Columns]) -> AppResult<Compiled> {
             AggregateKind::Max => "max",
         };
         let argument = match &aggregate.column {
-            Some(c) => resolve(c)?.0,
+            Some(c) => resolver.expression(c)?,
             None => "*".into(),
         };
         let distinct = if aggregate.distinct { "DISTINCT " } else { "" };
@@ -408,16 +428,11 @@ fn compile(query: &Query, tables: &[Columns]) -> AppResult<Compiled> {
             None => "count".into(),
         });
     }
-    let projection = expressions
-        .iter()
-        .enumerate()
-        .map(|(i, e)| format!("{e} AS v{i}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut sql = format!(
-        "SELECT {projection} FROM ONLY {} AS t0",
-        qualified(&query.schema, &query.table)
-    );
+    Ok((expressions, columns))
+}
+
+fn join_clauses(query: &Query, resolver: &Resolver) -> QueryResult<String> {
+    let mut sql = String::new();
     for (index, join) in query.joins.iter().enumerate() {
         let table = index + 1;
         let kind = match join.kind {
@@ -431,64 +446,80 @@ fn compile(query: &Query, tables: &[Columns]) -> AppResult<Compiled> {
         sql.push_str(&format!(
             " {kind} JOIN ONLY {} AS t{table} ON {} OPERATOR(pg_catalog.=) {}",
             qualified(&join.schema, &join.table),
-            resolve(&join.left)?.0,
-            resolve(&right)?.0
+            resolver.expression(&join.left)?,
+            resolver.expression(&right)?
         ));
     }
-    let mut parameters = Vec::new();
-    let mut predicates = Vec::new();
-    let mut compile_filter = |filter: &Filter| -> AppResult<String> {
-        let (column, kind) = resolve(&filter.column)?;
-        let operator = match filter.op {
-            Operator::IsNull => {
-                return Ok(format!("{column} IS NULL"));
-            }
-            Operator::IsNotNull => {
-                return Ok(format!("{column} IS NOT NULL"));
-            }
-            Operator::Eq => "=",
-            Operator::Ne => "<>",
-            Operator::Gt => ">",
-            Operator::Gte => ">=",
-            Operator::Lt => "<",
-            Operator::Lte => "<=",
-            Operator::Like => "~~",
-        };
-        if matches!(filter.op, Operator::Like) && !matches!(kind, "text" | "varchar" | "bpchar") {
-            return Err(rejected("like requires a text column"));
-        }
-        parameters.push(filter.value.clone().unwrap());
-        Ok(format!(
-            "{column} OPERATOR(pg_catalog.{operator}) (${}::pg_catalog.text)::pg_catalog.{kind}",
-            parameters.len()
-        ))
+    Ok(sql)
+}
+
+/// One predicate; filter values become bound text parameters cast to the column type.
+fn filter_predicate(
+    filter: &Filter,
+    resolver: &Resolver,
+    parameters: &mut Vec<String>,
+) -> QueryResult<String> {
+    let (column, kind) = resolver.resolve(&filter.column)?;
+    let operator = match filter.op {
+        Operator::IsNull => return Ok(format!("{column} IS NULL")),
+        Operator::IsNotNull => return Ok(format!("{column} IS NOT NULL")),
+        Operator::Eq => "=",
+        Operator::Ne => "<>",
+        Operator::Gt => ">",
+        Operator::Gte => ">=",
+        Operator::Lt => "<",
+        Operator::Lte => "<=",
+        Operator::Like => "~~",
     };
+    if matches!(filter.op, Operator::Like) && !matches!(kind, "text" | "varchar" | "bpchar") {
+        return Err(rejected("like requires a text column"));
+    }
+    let value = filter
+        .value
+        .clone()
+        .ok_or_else(|| rejected("invalid filter value; use is_null/is_not_null for NULL"))?;
+    parameters.push(value);
+    Ok(format!(
+        "{column} OPERATOR(pg_catalog.{operator}) (${}::pg_catalog.text)::pg_catalog.{kind}",
+        parameters.len()
+    ))
+}
+
+fn where_clause(
+    query: &Query,
+    resolver: &Resolver,
+    parameters: &mut Vec<String>,
+) -> QueryResult<String> {
+    let mut predicates = Vec::new();
     for filter in &query.filters {
-        predicates.push(compile_filter(filter)?);
+        predicates.push(filter_predicate(filter, resolver, parameters)?);
     }
     if !query.filter_groups.is_empty() {
-        let groups = query
-            .filter_groups
-            .iter()
-            .map(|group| {
-                group
-                    .iter()
-                    .map(&mut compile_filter)
-                    .collect::<AppResult<Vec<_>>>()
-                    .map(|parts| format!("({})", parts.join(" AND ")))
-            })
-            .collect::<AppResult<Vec<_>>>()?;
+        let mut groups = Vec::new();
+        for group in &query.filter_groups {
+            let parts = group
+                .iter()
+                .map(|filter| filter_predicate(filter, resolver, parameters))
+                .collect::<QueryResult<Vec<_>>>()?;
+            groups.push(format!("({})", parts.join(" AND ")));
+        }
         predicates.push(format!("({})", groups.join(" OR ")));
     }
-    if !predicates.is_empty() {
-        sql.push_str(&format!(" WHERE {}", predicates.join(" AND ")));
-    }
+    Ok(if predicates.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", predicates.join(" AND "))
+    })
+}
+
+fn group_and_order_clauses(query: &Query, resolver: &Resolver) -> QueryResult<String> {
+    let mut sql = String::new();
     if !query.group_by.is_empty() {
         let groups = query
             .group_by
             .iter()
-            .map(|c| resolve(c).map(|v| v.0))
-            .collect::<AppResult<Vec<_>>>()?;
+            .map(|c| resolver.expression(c))
+            .collect::<QueryResult<Vec<_>>>()?;
         sql.push_str(&format!(" GROUP BY {}", groups.join(", ")));
     }
     if !query.order_by.is_empty() {
@@ -496,29 +527,44 @@ fn compile(query: &Query, tables: &[Columns]) -> AppResult<Compiled> {
             .order_by
             .iter()
             .map(|o| {
-                format!(
-                    "{} {} NULLS LAST",
-                    o.field + 1,
-                    match o.direction {
-                        Direction::Asc => "ASC",
-                        Direction::Desc => "DESC",
-                    }
-                )
+                let direction = match o.direction {
+                    Direction::Asc => "ASC",
+                    Direction::Desc => "DESC",
+                };
+                format!("{} {direction} NULLS LAST", o.field + 1)
             })
             .collect::<Vec<_>>();
         sql.push_str(&format!(" ORDER BY {}", order.join(", ")));
     }
-    sql.push_str(&format!(
-        " LIMIT {} OFFSET {}",
+    Ok(sql)
+}
+
+fn compile(query: &Query, tables: &[Columns]) -> QueryResult<Compiled> {
+    query.validate()?;
+    let resolver = Resolver { tables };
+    let (expressions, columns) = projection(query, &resolver)?;
+    let projection = expressions
+        .iter()
+        .enumerate()
+        .map(|(i, e)| format!("{e} AS v{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut parameters = Vec::new();
+    let inner = format!(
+        "SELECT {projection} FROM ONLY {} AS t0{}{}{} LIMIT {} OFFSET {}",
+        qualified(&query.schema, &query.table),
+        join_clauses(query, &resolver)?,
+        where_clause(query, &resolver, &mut parameters)?,
+        group_and_order_clauses(query, &resolver)?,
         query.limit + 1,
         query.offset
-    ));
+    );
     // Convert only checked built-in outputs, and bound each value before it crosses the wire.
     let output = (0..columns.len())
         .map(|i| format!("pg_catalog.left(q.v{i}::pg_catalog.text, {CELL_CHARS})"))
         .collect::<Vec<_>>()
         .join(", ");
-    sql = format!("SELECT {output} FROM ({sql}) AS q");
+    let sql = format!("SELECT {output} FROM ({inner}) AS q");
     if sql.len() > 16 * 1024 {
         return Err(rejected("generated query is too large"));
     }
@@ -529,7 +575,7 @@ fn compile(query: &Query, tables: &[Columns]) -> AppResult<Compiled> {
     })
 }
 
-pub(super) async fn execute(conn: &PgConn, query: &Query) -> AppResult<Value> {
+pub(super) async fn execute(conn: &PgConn, query: &Query) -> QueryResult<Value> {
     conn.client.batch_execute("BEGIN READ ONLY; SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '2s'; SET LOCAL idle_in_transaction_session_timeout = '10s'; SET LOCAL search_path = pg_catalog; SET LOCAL work_mem = '4MB'; SET LOCAL max_parallel_workers_per_gather = 0").await?;
     let result = async {
         let mut tables = Vec::new();
@@ -549,7 +595,7 @@ pub(super) async fn execute(conn: &PgConn, query: &Query) -> AppResult<Value> {
             .take(query.limit)
             .map(|row| (0..compiled.columns.len()).map(|i| row.get(i)).collect())
             .collect();
-        Ok::<_, AppError>(super::tools::bounded_output(json!({
+        Ok::<_, ToolError>(super::tools::bounded_output(json!({
             "sql": compiled.sql, "parameters":compiled.parameters, "columns":compiled.columns,
             "rows":rows, "hasMore":has_more, "limit":query.limit, "offset":query.offset
         })))
@@ -561,6 +607,180 @@ pub(super) async fn execute(conn: &PgConn, query: &Query) -> AppResult<Value> {
     Ok(value)
 }
 
+/// Functions `query_sql` refuses by name. The read-only transaction and the user's
+/// approval are the actual boundary; this list is only a best-effort net against calls
+/// that act outside the transaction (files, other sessions, server configuration,
+/// sleeps, locks, remote connections) or run SQL hidden in string literals. It is easy
+/// to miss a call made indirectly, for example through a view or a user-defined wrapper.
+const BLOCKED_FUNCTIONS: &[&str] = &[
+    "pg_read_file",
+    "pg_read_binary_file",
+    "pg_stat_file",
+    "pg_terminate_backend",
+    "pg_cancel_backend",
+    "pg_reload_conf",
+    "pg_rotate_logfile",
+    "pg_promote",
+    "pg_switch_wal",
+    "pg_create_restore_point",
+    "pg_log_backend_memory_contexts",
+    "pg_notify",
+    "pg_file_write",
+    "pg_file_rename",
+    "pg_file_unlink",
+    "pg_logdir_ls",
+    "lo_import",
+    "lo_export",
+    "set_config",
+    "query_to_xml",
+    "query_to_xmlschema",
+    "query_to_xml_and_xmlschema",
+];
+const BLOCKED_PREFIXES: &[&str] = &[
+    "dblink",
+    "pg_sleep",
+    "pg_advisory",
+    "pg_try_advisory",
+    "pg_ls_",
+];
+/// Marks a Unicode-escaped quoted identifier, which can spell any function name.
+const UNICODE_IDENTIFIER: &str = "u&\"";
+
+/// The first blocked function `sql` refers to, matched case-insensitively outside
+/// string literals and comments.
+pub(super) fn blocked_function(sql: &str) -> Option<String> {
+    // Whether backslashes escape quotes depends on server settings; checking both
+    // readings keeps text that either one treats as code from hiding in a literal.
+    for backslash_escapes in [false, true] {
+        let words = sql_words(sql, backslash_escapes);
+        if let Some(word) = words.iter().find(|word| {
+            BLOCKED_FUNCTIONS.contains(&word.as_str())
+                || BLOCKED_PREFIXES
+                    .iter()
+                    .any(|prefix| word.starts_with(prefix))
+        }) {
+            return Some(word.clone());
+        }
+        if words.iter().any(|word| word == UNICODE_IDENTIFIER) {
+            return Some("U& quoted identifier".into());
+        }
+        if words.iter().any(|word| word == "copy") && words.iter().any(|word| word == "program") {
+            return Some("COPY … PROGRAM".into());
+        }
+    }
+    None
+}
+
+/// Lowercased words outside string literals and comments. Quoted identifiers count as
+/// words because `"pg_sleep"(1)` still calls the function.
+fn sql_words(sql: &str, backslash_escapes: bool) -> Vec<String> {
+    let chars: Vec<char> = sql.chars().collect();
+    let at = |index: usize| chars.get(index).copied();
+    let mut words = Vec::new();
+    let mut i = 0;
+    while let Some(c) = at(i) {
+        let next = at(i + 1);
+        if c == '-' && next == Some('-') {
+            while at(i).is_some_and(|c| c != '\n') {
+                i += 1;
+            }
+        } else if c == '/' && next == Some('*') {
+            let mut depth = 0usize;
+            while let Some(c) = at(i) {
+                if c == '/' && at(i + 1) == Some('*') {
+                    depth += 1;
+                    i += 2;
+                } else if c == '*' && at(i + 1) == Some('/') {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        } else if c == '\'' {
+            i = skip_string(&chars, i, backslash_escapes);
+        } else if c == '"' {
+            let mut word = String::new();
+            i += 1;
+            while let Some(c) = at(i) {
+                if c == '"' {
+                    if at(i + 1) == Some('"') {
+                        word.push('"');
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                word.push(c);
+                i += 1;
+            }
+            words.push(word.to_lowercase());
+        } else if c == '$'
+            && let Some(tag) = dollar_tag(&chars, i)
+        {
+            let body = i + tag.len();
+            i = (body..chars.len())
+                .find(|&end| chars[end..].starts_with(&tag))
+                .map_or(chars.len(), |end| end + tag.len());
+        } else if c.is_alphabetic() || c == '_' {
+            let start = i;
+            while at(i).is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect::<String>().to_lowercase();
+            if word == "u" && at(i) == Some('&') && at(i + 1) == Some('"') {
+                words.push(UNICODE_IDENTIFIER.into());
+            }
+            // E'…' always treats backslashes as escapes.
+            if word == "e" && at(i) == Some('\'') {
+                i = skip_string(&chars, i, true);
+            }
+            words.push(word);
+        } else {
+            i += 1;
+        }
+    }
+    words
+}
+
+/// The index after the string literal that opens at `start`.
+fn skip_string(chars: &[char], start: usize, backslash_escapes: bool) -> usize {
+    let mut i = start + 1;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' if backslash_escapes => i += 2,
+            '\'' if chars.get(i + 1) == Some(&'\'') => i += 2,
+            '\'' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    chars.len()
+}
+
+/// The `$tag$` delimiter opening a dollar-quoted string at `start`, if any.
+fn dollar_tag(chars: &[char], start: usize) -> Option<Vec<char>> {
+    let mut end = start + 1;
+    while let Some(&c) = chars.get(end) {
+        if c == '$' {
+            return Some(chars[start..=end].to_vec());
+        }
+        let valid = if end == start + 1 {
+            c.is_alphabetic() || c == '_'
+        } else {
+            c.is_alphanumeric() || c == '_'
+        };
+        if !valid {
+            return None;
+        }
+        end += 1;
+    }
+    None
+}
+
 fn wrap_sql(sql: &str) -> String {
     let sql = sql.trim().trim_end_matches(';').trim_end();
     format!(
@@ -568,7 +788,7 @@ fn wrap_sql(sql: &str) -> String {
     )
 }
 
-pub(super) async fn execute_sql(conn: &PgConn, sql: &str) -> AppResult<Value> {
+pub(super) async fn execute_sql(conn: &PgConn, sql: &str) -> QueryResult<Value> {
     conn.client.batch_execute("BEGIN READ ONLY; SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '2s'; SET LOCAL idle_in_transaction_session_timeout = '10s'; SET LOCAL work_mem = '4MB'; SET LOCAL max_parallel_workers_per_gather = 0").await?;
     let result = async {
         let statement = conn.client.prepare(&wrap_sql(sql)).await?;
@@ -582,7 +802,7 @@ pub(super) async fn execute_sql(conn: &PgConn, sql: &str) -> AppResult<Value> {
                 Err(_) => { truncated = true; Value::String(value) }
             }
         }).collect();
-        Ok::<_, AppError>(super::tools::bounded_output(json!({"sql":sql,"parameters":[],"rows":rows,"hasMore":has_more,"rowTruncated":truncated})))
+        Ok::<_, ToolError>(super::tools::bounded_output(json!({"sql":sql,"parameters":[],"rows":rows,"hasMore":has_more,"rowTruncated":truncated})))
     }.await;
     let rollback = conn.client.batch_execute("ROLLBACK").await;
     let value = result?;
@@ -595,30 +815,19 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore = "requires disposable localhost Postgres with GUCKPG_AI_TEST_PORT set"]
     async fn structured_reads_preserve_data_and_reject_indirect_code() {
-        use crate::config::{ConnectionConfig, SslMode};
         use crate::pg::Transport;
-        let port = std::env::var("GUCKPG_AI_TEST_PORT")
-            .expect("set disposable localhost port")
-            .parse()
-            .unwrap();
-        let config = ConnectionConfig {
-            id: "ai-read-test".into(),
-            name: "AI read test".into(),
-            host: "127.0.0.1".into(),
-            port,
-            user: "postgres".into(),
-            database: "guckpg_ai_test".into(),
-            ssl_mode: SslMode::Disable,
-            read_only: false,
-            color: None,
-            ssh: None,
-            folder: None,
+        let Some((config, password)) = crate::testutil::test_db("ai-read-test") else {
+            return;
         };
-        let conn = PgConn::connect(&config, &config.database, None, Transport::Direct)
-            .await
-            .unwrap();
+        let conn = PgConn::connect(
+            &config,
+            &config.database,
+            Some(&password),
+            Transport::Direct,
+        )
+        .await
+        .unwrap();
         let schema = format!("ai_read_{}", uuid::Uuid::new_v4().simple());
         let role = format!("reader_{}", uuid::Uuid::new_v4().simple());
         conn.client.batch_execute(&format!(
@@ -734,6 +943,10 @@ mod tests {
             .unwrap()
             .get(0);
         assert!(!called);
+        conn.client
+            .batch_execute(&format!("DROP SCHEMA {schema} CASCADE; DROP ROLE {role}"))
+            .await
+            .unwrap();
     }
 
     fn plan() -> Value {
@@ -787,6 +1000,101 @@ mod tests {
                 .to_string()
                 .contains("unknown field `unexpected`")
         );
+    }
+
+    #[test]
+    fn blocks_dangerous_functions_outside_literals_and_comments() {
+        for sql in [
+            "SELECT pg_read_file('/etc/passwd')",
+            "select PG_READ_BINARY_FILE('x')",
+            "SELECT * FROM pg_catalog.pg_ls_dir('.')",
+            "SELECT pg_ls_waldir()",
+            "SELECT pg_stat_file('postgresql.conf')",
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity",
+            "SELECT pg_cancel_backend(1)",
+            "SELECT pg_reload_conf()",
+            "SELECT pg_rotate_logfile()",
+            "SELECT * FROM dblink('host=x', 'select 1') AS t(a int)",
+            "SELECT dblink_exec('host=x', 'DROP TABLE t')",
+            "SELECT lo_import('/etc/passwd')",
+            "SELECT lo_export(1, '/tmp/x')",
+            "SELECT pg_sleep(10)",
+            "SELECT pg_sleep_for('1 hour')",
+            "SELECT set_config('statement_timeout', '0', false)",
+            "SELECT pg_advisory_lock(1)",
+            "SELECT pg_try_advisory_xact_lock(1)",
+            "SELECT \"pg_sleep\"(1)",
+            "SELECT \"PG_SLEEP\"(1)",
+            "SELECT U&\"pg\\005fsleep\"(1)",
+            "SELECT query_to_xml('select pg_sleep(1)', true, true, '')",
+            "COPY (SELECT 1) TO PROGRAM 'rm -rf /'",
+            "SELECT 1 /* outer /* nested */ still comment */, pg_sleep(1)",
+            "SELECT 'it''s', pg_sleep(1)",
+            "SELECT $$text$$, pg_sleep(1)",
+            "SELECT $tag$ $$ $tag$, pg_sleep(1)",
+            "SELECT E'\\'', pg_sleep(1) --'",
+            // Read as code when backslashes escape quotes (standard_conforming_strings off).
+            "SELECT 'a\\'', pg_sleep(1) --'",
+        ] {
+            assert!(blocked_function(sql).is_some(), "{sql}");
+        }
+        assert_eq!(
+            blocked_function("select Pg_Sleep(1)").as_deref(),
+            Some("pg_sleep")
+        );
+    }
+
+    #[test]
+    fn allows_ordinary_reads_and_names_inside_literals_or_comments() {
+        for sql in [
+            "SELECT count(*) FROM orders WHERE note = 'pg_sleep(1)'",
+            "SELECT 1 -- pg_read_file('x')\n",
+            "SELECT 1 /* pg_terminate_backend(1) */",
+            "SELECT $$pg_sleep(1)$$",
+            "SELECT $body$ dblink('x') $body$",
+            "SELECT \"sleep_minutes\", copy_count FROM programs",
+            "WITH totals AS (SELECT customer_id, sum(amount) FROM orders GROUP BY 1) SELECT * FROM totals",
+            "SELECT e.name FROM employees e WHERE e.title = 'it''s'",
+            "SELECT $1",
+        ] {
+            assert_eq!(blocked_function(sql), None, "{sql}");
+        }
+    }
+
+    #[test]
+    fn tool_schema_limits_follow_the_validation_constants() {
+        let definition = definition();
+        let properties = &definition["function"]["parameters"]["properties"];
+        assert_eq!(properties["limit"]["maximum"], MAX_ROWS);
+        assert_eq!(properties["offset"]["maximum"], MAX_OFFSET);
+        assert_eq!(properties["columns"]["maxItems"], MAX_COLUMNS);
+        assert_eq!(properties["joins"]["maxItems"], MAX_JOINS);
+        assert_eq!(properties["filters"]["maxItems"], MAX_FILTERS);
+        assert_eq!(properties["filterGroups"]["items"]["maxItems"], MAX_FILTERS);
+        assert_eq!(
+            properties["columns"]["items"]["properties"]["table"]["maximum"],
+            MAX_JOINS
+        );
+        assert_eq!(
+            properties["orderBy"]["items"]["properties"]["field"]["maximum"],
+            MAX_COLUMNS - 1
+        );
+        assert_eq!(
+            properties["filters"]["items"]["properties"]["value"]["maxLength"],
+            MAX_VALUE_BYTES
+        );
+        assert_eq!(properties["schema"]["maxLength"], MAX_IDENTIFIER_BYTES);
+        assert_eq!(
+            properties["aggregates"]["items"]["properties"]["column"]["anyOf"][1]["type"],
+            "null"
+        );
+    }
+
+    #[test]
+    fn plan_rejections_are_typed() {
+        let mut value = plan();
+        value["limit"] = json!(0);
+        assert!(matches!(Query::parse(&value), Err(ToolError::Rejected(_))));
     }
 
     #[test]

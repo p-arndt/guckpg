@@ -33,12 +33,20 @@ fn command(
                 SslMode::Disable => "disable",
                 SslMode::Prefer => "prefer",
                 SslMode::Require => "require",
+                SslMode::VerifyCa => "verify-ca",
                 SslMode::VerifyFull => "verify-full",
             },
         )
         .env("PGCONNECT_TIMEOUT", "15")
         .env("PGPASSWORD", password.unwrap_or(""))
         .stdin(Stdio::null());
+    if let Some(root_cert) = cfg
+        .ssl_root_cert
+        .as_deref()
+        .filter(|p| !p.trim().is_empty())
+    {
+        cmd.env("PGSSLROOTCERT", crate::ssh::expand_home(root_cert.trim()));
+    }
     cmd
 }
 
@@ -48,8 +56,8 @@ fn validate(cfg: &ConnectionConfig, database: &str, path: &str, restore: bool) -
             "Backup and restore do not support SSH connections",
         ));
     }
-    if restore && cfg.read_only {
-        return Err(AppError::msg("Cannot restore using a read-only connection"));
+    if restore {
+        crate::guard::ensure_writable(cfg)?;
     }
     if database.trim().is_empty() {
         return Err(AppError::msg("Select a database"));
@@ -149,17 +157,10 @@ mod tests {
 
     fn config() -> ConnectionConfig {
         ConnectionConfig {
-            id: "id".into(),
-            name: "name".into(),
             host: "host".into(),
-            port: 5432,
             user: "user".into(),
             database: "db".into(),
-            ssl_mode: SslMode::Prefer,
-            read_only: false,
-            color: None,
-            ssh: None,
-            folder: None,
+            ..crate::testutil::connection("id")
         }
     }
     #[test]
@@ -168,7 +169,12 @@ mod tests {
         assert!(validate(&cfg, "", "/tmp/a", false).is_err());
         assert!(validate(&cfg, "db", "relative", false).is_err());
         cfg.read_only = true;
-        assert!(validate(&cfg, "db", "/tmp/a", true).is_err());
+        assert_eq!(
+            validate(&cfg, "db", "/tmp/a", true)
+                .unwrap_err()
+                .to_string(),
+            crate::guard::READ_ONLY_MESSAGE
+        );
         assert!(validate(&cfg, "db", "/tmp/a", false).is_ok());
         cfg.ssh = Some(SshConfig {
             host: "host".into(),

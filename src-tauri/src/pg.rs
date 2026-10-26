@@ -7,10 +7,13 @@ use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 
 use futures_util::{StreamExt, pin_mut};
+use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::{
+    CertificateError, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
+};
 use serde::Serialize;
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{CancelToken, Client, SimpleQueryMessage};
@@ -72,40 +75,147 @@ pub struct QueryOutput {
 static PROVIDER: LazyLock<Arc<CryptoProvider>> =
     LazyLock::new(|| Arc::new(rustls::crypto::ring::default_provider()));
 
-fn tls_config(mode: SslMode) -> AppResult<ClientConfig> {
-    let builder = ClientConfig::builder_with_provider(PROVIDER.clone())
-        .with_safe_default_protocol_versions()
-        .map_err(|e| AppError::msg(format!("TLS: {e}")))?;
-    let config = match mode {
-        SslMode::VerifyFull => {
-            let mut roots = RootCertStore::empty();
-            roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
-            builder.with_root_certificates(roots).with_no_client_auth()
+/// The CA file from the config, if one is set.
+fn root_cert_path(cfg_value: Option<&str>) -> Option<&str> {
+    cfg_value.map(str::trim).filter(|p| !p.is_empty())
+}
+
+/// Trust anchors for the verifying modes: the configured CA file replaces
+/// the system roots, like libpq's `sslrootcert`.
+fn roots(root_cert: Option<&str>) -> AppResult<RootCertStore> {
+    let mut roots = RootCertStore::empty();
+    match root_cert {
+        Some(path) => {
+            use rustls::pki_types::pem::PemObject;
+            let path = crate::ssh::expand_home(path);
+            let pem = std::fs::read(&path).map_err(|e| {
+                AppError::msg(format!("TLS root certificate {}: {e}", path.display()))
+            })?;
+            let certs = CertificateDer::pem_slice_iter(&pem)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    AppError::msg(format!("TLS root certificate {}: {e}", path.display()))
+                })?;
+            let (added, _) = roots.add_parsable_certificates(certs);
+            if added == 0 {
+                return Err(AppError::msg(format!(
+                    "TLS root certificate {}: no usable certificate found",
+                    path.display()
+                )));
+            }
         }
-        // libpq's prefer/require encrypt but do not authenticate the server.
-        _ => builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoCertVerification(PROVIDER.clone())))
-            .with_no_client_auth(),
+        None => {
+            roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
+        }
+    }
+    Ok(roots)
+}
+
+fn verifier(mode: SslMode, root_cert: Option<&str>) -> AppResult<Arc<dyn ServerCertVerifier>> {
+    let webpki = || {
+        WebPkiServerVerifier::builder_with_provider(Arc::new(roots(root_cert)?), PROVIDER.clone())
+            .build()
+            .map_err(|e| AppError::msg(format!("TLS: {e}")))
     };
-    Ok(config)
+    Ok(match mode {
+        SslMode::VerifyFull => webpki()?,
+        SslMode::VerifyCa => Arc::new(ChainOnly(webpki()?)),
+        // libpq's prefer/require encrypt but do not authenticate the server.
+        SslMode::Disable | SslMode::Prefer | SslMode::Require => {
+            Arc::new(NoCertVerification(PROVIDER.clone()))
+        }
+    })
+}
+
+fn tls_config(mode: SslMode, root_cert: Option<&str>) -> AppResult<ClientConfig> {
+    Ok(ClientConfig::builder_with_provider(PROVIDER.clone())
+        .with_safe_default_protocol_versions()
+        .map_err(|e| AppError::msg(format!("TLS: {e}")))?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier(mode, root_cert)?)
+        .with_no_client_auth())
 }
 
 /// Built once per process: every editor tab opens its own connection, and
 /// loading the system roots scans the macOS keychain, which takes a while.
+/// Configs with their own CA file are built per connection instead, so an
+/// updated file is picked up without a restart.
 static VERIFIED: OnceLock<MakeRustlsConnect> = OnceLock::new();
+static VERIFIED_CA: OnceLock<MakeRustlsConnect> = OnceLock::new();
 static UNVERIFIED: OnceLock<MakeRustlsConnect> = OnceLock::new();
 
-fn tls_connector(mode: SslMode) -> AppResult<MakeRustlsConnect> {
+fn tls_connector_blocking(mode: SslMode, root_cert: Option<&str>) -> AppResult<MakeRustlsConnect> {
+    if root_cert.is_some() && mode.verifies() {
+        return Ok(MakeRustlsConnect::new(tls_config(mode, root_cert)?));
+    }
     let cell = match mode {
         SslMode::VerifyFull => &VERIFIED,
+        SslMode::VerifyCa => &VERIFIED_CA,
         SslMode::Disable | SslMode::Prefer | SslMode::Require => &UNVERIFIED,
     };
     if let Some(tls) = cell.get() {
         return Ok(tls.clone());
     }
-    let tls = MakeRustlsConnect::new(tls_config(mode)?);
+    let tls = MakeRustlsConnect::new(tls_config(mode, None)?);
     Ok(cell.get_or_init(|| tls).clone())
+}
+
+/// Reading certificate files and the system trust store is blocking IO.
+async fn tls_connector(mode: SslMode, root_cert: Option<&str>) -> AppResult<MakeRustlsConnect> {
+    let root_cert = root_cert.map(str::to_string);
+    tokio::task::spawn_blocking(move || tls_connector_blocking(mode, root_cert.as_deref()))
+        .await
+        .map_err(|e| AppError::msg(format!("TLS: {e}")))?
+}
+
+/// `verify-ca`: the chain must lead to a trusted root, but the certificate
+/// may name a different host (servers reached by IP or through a tunnel).
+#[derive(Debug)]
+struct ChainOnly(Arc<WebPkiServerVerifier>);
+
+impl ServerCertVerifier for ChainOnly {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        // WebPKI checks the chain before the name, so a name error means the
+        // chain itself was accepted.
+        match self
+            .0
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp, now)
+        {
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. },
+            )) => Ok(ServerCertVerified::assertion()),
+            other => other,
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.supported_verify_schemes()
+    }
 }
 
 #[derive(Debug)]
@@ -171,7 +281,9 @@ pub fn pg_config(
         .ssl_mode(match cfg.ssl_mode {
             SslMode::Disable => tokio_postgres::config::SslMode::Disable,
             SslMode::Prefer => tokio_postgres::config::SslMode::Prefer,
-            SslMode::Require | SslMode::VerifyFull => tokio_postgres::config::SslMode::Require,
+            SslMode::Require | SslMode::VerifyCa | SslMode::VerifyFull => {
+                tokio_postgres::config::SslMode::Require
+            }
         });
     if let Some(pw) = password {
         pg.password(pw);
@@ -201,7 +313,7 @@ impl PgConn {
         transport: Transport,
     ) -> AppResult<PgConn> {
         let pg = pg_config(cfg, database, password);
-        let tls = tls_connector(cfg.ssl_mode)?;
+        let tls = tls_connector(cfg.ssl_mode, root_cert_path(cfg.ssl_root_cert.as_deref())).await?;
 
         let client = match &transport {
             Transport::Direct => {
@@ -325,17 +437,13 @@ mod tests {
 
     fn sample() -> ConnectionConfig {
         ConnectionConfig {
-            id: "x".into(),
-            name: "x".into(),
             host: "db".into(),
             port: 5433,
             user: "app".into(),
             database: "app".into(),
             ssl_mode: SslMode::VerifyFull,
             read_only: true,
-            color: None,
-            ssh: None,
-            folder: None,
+            ..crate::testutil::connection("x")
         }
     }
 
@@ -359,17 +467,120 @@ mod tests {
             SslMode::Disable,
             SslMode::Prefer,
             SslMode::Require,
+            SslMode::VerifyCa,
             SslMode::VerifyFull,
         ] {
-            tls_config(mode).unwrap();
+            tls_config(mode, None).unwrap();
         }
     }
 
-    #[test]
-    fn tls_connectors_are_cached() {
-        tls_connector(SslMode::VerifyFull).unwrap();
-        tls_connector(SslMode::Require).unwrap();
+    #[tokio::test]
+    async fn tls_connectors_are_cached() {
+        tls_connector(SslMode::VerifyFull, None).await.unwrap();
+        tls_connector(SslMode::VerifyCa, None).await.unwrap();
+        tls_connector(SslMode::Require, None).await.unwrap();
         assert!(VERIFIED.get().is_some());
+        assert!(VERIFIED_CA.get().is_some());
         assert!(UNVERIFIED.get().is_some());
+    }
+
+    /// A test CA and a leaf it signed for `db.internal`, valid until 2126.
+    const TEST_CA: &str = "-----BEGIN CERTIFICATE-----
+MIIBeDCCAR6gAwIBAgIUOAT9kZYyE/Z2Mhpba/GAWgt3xrwwCgYIKoZIzj0EAwIw
+GTEXMBUGA1UEAwwOZ3Vja3BnIHRlc3QgQ0EwIBcNMjYxMDI2MjIyNTQ2WhgPMjEy
+NjEwMDIyMjI1NDZaMBkxFzAVBgNVBAMMDmd1Y2twZyB0ZXN0IENBMFkwEwYHKoZI
+zj0CAQYIKoZIzj0DAQcDQgAEMyfFIMK31cQVJ+9ZPY0YiGQROmN4D8vid5m+yHt2
+yW/HEA1cj3dbNcSGiGGZDlxhKC5lXzd2qaiew9F4qPpOJqNCMEAwHQYDVR0OBBYE
+FKeqWyJbMrmyBJh5htXXDtg6lHrkMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/
+BAQDAgIEMAoGCCqGSM49BAMCA0gAMEUCIBumrByz1pVmr4p8ZnwiWUSRTowVvGpe
+BSmmO/V4qcSEAiEAqCPf3NJAtbnbsSNWMM+40OWDC2oqtXv3qGCPDBKIurE=
+-----END CERTIFICATE-----
+";
+    const TEST_LEAF: &str = "-----BEGIN CERTIFICATE-----
+MIIBbTCCAROgAwIBAgIUVHAZBPOMrOFxdfoz2D60ollo33owCgYIKoZIzj0EAwIw
+GTEXMBUGA1UEAwwOZ3Vja3BnIHRlc3QgQ0EwIBcNMjYxMDI2MjIyNTQ2WhgPMjEy
+NjEwMDIyMjI1NDZaMBYxFDASBgNVBAMMC2RiLmludGVybmFsMFkwEwYHKoZIzj0C
+AQYIKoZIzj0DAQcDQgAE9V0kuhSMyXNApZsoNxMtBVSiNHyx0tgfBlhj6CTIa06X
+pRLECaUJEx387XxfwGMqTifKTPuXlITtCc0KsXdYkqM6MDgwFgYDVR0RBA8wDYIL
+ZGIuaW50ZXJuYWwwCQYDVR0TBAIwADATBgNVHSUEDDAKBggrBgEFBQcDATAKBggq
+hkjOPQQDAgNIADBFAiAgeyo68rsxIoOwB+wykK6SWHWxh0X7ux210hWwYbFskQIh
+AKfgPVBvSO9vRozsAGopsLKhbL8xLNmC/PZFI2sz3uhq
+-----END CERTIFICATE-----
+";
+    const OTHER_CA: &str = "-----BEGIN CERTIFICATE-----
+MIIBbDCCARKgAwIBAgIUE5mFqszKZQyivLznRbAb3tekjZcwCgYIKoZIzj0EAwIw
+EzERMA8GA1UEAwwIb3RoZXIgQ0EwIBcNMjYxMDI2MjIyNTUwWhgPMjEyNjEwMDIy
+MjI1NTBaMBMxETAPBgNVBAMMCG90aGVyIENBMFkwEwYHKoZIzj0CAQYIKoZIzj0D
+AQcDQgAEEd3sae90R9Trk4VJ1CbIsTT1L0wn5ULyNR2Cm2PHsdVXvAKrRrMZhrUJ
+xJR74FGZWRWCws67hvWqMNwQNcHY26NCMEAwHQYDVR0OBBYEFOm1vebdpmQn0kB5
+xMUQmzcQbdrjMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgIEMAoGCCqG
+SM49BAMCA0gAMEUCIQD43tETue0DyAnhmncg6AXyen+hR6fJHoa8YaBXdBS9FgIg
+b/n5zOOwfBgVoklWiBMYBLZxl6IuHKRbUgBe4mxITe0=
+-----END CERTIFICATE-----
+";
+
+    fn ca_file(dir: &tempfile::TempDir, name: &str, pem: &str) -> String {
+        let path = dir.path().join(name);
+        std::fs::write(&path, pem).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    fn verify(
+        mode: SslMode,
+        root_cert: &str,
+        host: &str,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        use rustls::pki_types::pem::PemObject;
+        let verifier = verifier(mode, Some(root_cert)).unwrap();
+        let leaf = CertificateDer::from_pem_slice(TEST_LEAF.as_bytes()).unwrap();
+        // Inside the certificates' validity, independent of the test clock.
+        let now = UnixTime::since_unix_epoch(Duration::from_secs(1_893_456_000));
+        verifier.verify_server_cert(
+            &leaf,
+            &[],
+            &ServerName::try_from(host.to_string()).unwrap(),
+            &[],
+            now,
+        )
+    }
+
+    #[test]
+    fn verify_ca_checks_the_chain_but_not_the_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = ca_file(&dir, "ca.pem", TEST_CA);
+        let other = ca_file(&dir, "other.pem", OTHER_CA);
+
+        assert!(verify(SslMode::VerifyCa, &ca, "db.internal").is_ok());
+        assert!(verify(SslMode::VerifyCa, &ca, "10.0.0.5").is_ok());
+        assert!(verify(SslMode::VerifyCa, &other, "db.internal").is_err());
+
+        assert!(verify(SslMode::VerifyFull, &ca, "db.internal").is_ok());
+        assert!(verify(SslMode::VerifyFull, &ca, "10.0.0.5").is_err());
+        assert!(verify(SslMode::VerifyFull, &other, "db.internal").is_err());
+    }
+
+    #[test]
+    fn root_cert_file_errors_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.pem");
+        let err = tls_config(SslMode::VerifyFull, missing.to_str()).unwrap_err();
+        assert!(err.to_string().contains("missing.pem"), "{err}");
+
+        let garbage = ca_file(&dir, "garbage.pem", "not a certificate");
+        assert!(tls_config(SslMode::VerifyCa, Some(&garbage)).is_err());
+
+        assert_eq!(root_cert_path(Some("  ")), None);
+        assert_eq!(root_cert_path(Some(" /a.pem ")), Some("/a.pem"));
+        assert_eq!(root_cert_path(None), None);
+    }
+
+    #[test]
+    fn verify_ca_requires_tls() {
+        let mut cfg = sample();
+        cfg.ssl_mode = SslMode::VerifyCa;
+        assert_eq!(
+            pg_config(&cfg, "app", None).get_ssl_mode(),
+            tokio_postgres::config::SslMode::Require
+        );
     }
 }

@@ -1,10 +1,5 @@
 <script lang="ts">
 	import FolderIcon from '@lucide/svelte/icons/folder';
-	import TableIcon from '@lucide/svelte/icons/table-2';
-	import EyeIcon from '@lucide/svelte/icons/eye';
-	import LayersIcon from '@lucide/svelte/icons/layers';
-	import GlobeIcon from '@lucide/svelte/icons/globe';
-	import CodeIcon from '@lucide/svelte/icons/code';
 	import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
 	import { toast } from 'svelte-sonner';
 	import { api, errorMessage, type Relation, type SchemaObject } from '#lib/api.js';
@@ -14,6 +9,7 @@
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { tabs } from '#lib/state/tabs.svelte.js';
 	import TreeRow from './TreeRow.svelte';
+	import { kindStyle } from './kinds.js';
 	import NewTableDialog from '../NewTableDialog.svelte';
 
 	interface Props {
@@ -173,15 +169,8 @@
 							}}
 						>
 							{#snippet icon()}
-								{#if rel.kind === 'view'}
-									<EyeIcon class="size-3.5" />
-								{:else if rel.kind === 'materialized'}
-									<LayersIcon class="size-3.5" />
-								{:else if rel.kind === 'foreign'}
-									<GlobeIcon class="size-3.5" />
-								{:else}
-									<TableIcon class="size-3.5" />
-								{/if}
+								{@const style = kindStyle(rel.kind)}
+								<style.icon class="size-3.5 {style.color}" />
 							{/snippet}
 							{#snippet trailing()}
 								<span
@@ -262,7 +251,10 @@
 								if (e.key === 'Enter') void openDefinition(object);
 							}}
 						>
-							{#snippet icon()}<CodeIcon class="size-3.5" />{/snippet}
+							{#snippet icon()}
+								{@const style = kindStyle(object.kind)}
+								<style.icon class="size-3.5 {style.color}" />
+							{/snippet}
 						</TreeRow>
 					{/snippet}
 				</ContextMenu.Trigger>

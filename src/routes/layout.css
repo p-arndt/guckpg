@@ -94,6 +94,14 @@
 	--color-bad: var(--color-bad);
 	--color-bad-soft: var(--color-bad-soft);
 	--color-scrim: var(--color-scrim);
+	--color-kind-table: var(--kind-table);
+	--color-kind-view: var(--kind-view);
+	--color-kind-materialized: var(--kind-materialized);
+	--color-kind-foreign: var(--kind-foreign);
+	--color-kind-function: var(--kind-function);
+	--color-kind-procedure: var(--kind-procedure);
+	--color-kind-trigger: var(--kind-trigger);
+	--color-kind-sequence: var(--kind-sequence);
 
 	--radius-sm: 5px;
 	--radius-md: 6px;

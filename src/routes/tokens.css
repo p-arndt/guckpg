@@ -53,6 +53,16 @@
 	--color-bad-soft: oklch(94.5% 0.03 25);
 	--color-scrim: oklch(19% 0.01 60 / 35%);
 
+	/* Tree icon colours per object kind, so tables, views and routines read apart at a glance */
+	--kind-table: oklch(52% 0.13 255);
+	--kind-view: oklch(50% 0.1 190);
+	--kind-materialized: oklch(50% 0.15 300);
+	--kind-foreign: oklch(52% 0.1 225);
+	--kind-function: oklch(55% 0.13 70);
+	--kind-procedure: oklch(54% 0.15 45);
+	--kind-trigger: oklch(53% 0.17 355);
+	--kind-sequence: oklch(50% 0.12 145);
+
 	--syntax-keyword: oklch(48% 0.14 250);
 	--syntax-string: oklch(47% 0.12 150);
 	--syntax-number: oklch(52% 0.13 60);
@@ -100,6 +110,15 @@
 	--color-bad: oklch(70% 0.17 25);
 	--color-bad-soft: oklch(24.5% 0.035 25);
 	--color-scrim: oklch(8% 0.006 250 / 60%);
+
+	--kind-table: oklch(75% 0.11 255);
+	--kind-view: oklch(77% 0.1 190);
+	--kind-materialized: oklch(74% 0.13 300);
+	--kind-foreign: oklch(77% 0.09 225);
+	--kind-function: oklch(81% 0.13 80);
+	--kind-procedure: oklch(76% 0.14 50);
+	--kind-trigger: oklch(73% 0.15 355);
+	--kind-sequence: oklch(77% 0.13 145);
 
 	--syntax-keyword: oklch(77% 0.12 245);
 	--syntax-string: oklch(78% 0.13 150);

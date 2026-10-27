@@ -7,6 +7,7 @@ ci:
     pnpm test
     pnpm build
     cargo fmt --all --check
+    python3 -m unittest discover -s .github/scripts -p 'test_*.py'
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo test --workspace --locked
 

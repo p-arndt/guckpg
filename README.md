@@ -39,7 +39,7 @@ Browse schemas, write queries, edit data and explore relationships — all from 
 Download for **macOS** (Apple Silicon / Intel) or **Windows** from [GitHub Releases](https://github.com/p-arndt/guckpg/releases).
 
 > [!NOTE]
-> Builds are unsigned and macOS builds are not notarized. Your operating system may warn when opening them.
+> Windows builds are unsigned. macOS builds use an ad-hoc signature and are not notarized, so your operating system may warn when opening them.
 
 ## Database tools
 

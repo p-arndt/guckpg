@@ -1954,10 +1954,13 @@ dependencies = [
 name = "guckpg"
 version = "0.1.1"
 dependencies = [
+ "aes",
+ "cbc",
  "futures-util",
  "keyring",
  "log",
  "postgres-protocol",
+ "quick-xml",
  "reqwest",
  "russh",
  "rustls",

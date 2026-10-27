@@ -10,6 +10,7 @@ mod explain;
 mod guard;
 #[cfg(test)]
 mod it;
+mod navicat;
 mod pg;
 mod roles;
 mod session;
@@ -63,6 +64,7 @@ pub fn run() {
             ai::ai_cancel,
             ai::ai_decide_write,
             commands::list_connections,
+            navicat::import_navicat,
             commands::secret_status,
             commands::save_connection,
             commands::delete_connection,

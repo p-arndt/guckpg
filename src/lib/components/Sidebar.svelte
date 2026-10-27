@@ -12,6 +12,7 @@
 	import { sidebar } from '#lib/state/sidebar.svelte.js';
 	import ConnectionNode from './tree/ConnectionNode.svelte';
 	import FolderNode from './tree/FolderNode.svelte';
+	import NavicatImport from './NavicatImport.svelte';
 
 	interface Props {
 		onEdit: (c: ConnectionConfig | null) => void;
@@ -136,6 +137,7 @@
 <div class="flex h-9 shrink-0 items-center justify-between pr-1.5 pl-3.5">
 	<h2 class="text-[13px] font-medium text-muted-foreground">Connections</h2>
 	<div class="flex items-center">
+		<NavicatImport />
 		<Button size="icon-xs" variant="ghost" title="New folder" onclick={() => newFolder()}>
 			<FolderPlusIcon />
 		</Button>

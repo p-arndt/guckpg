@@ -268,6 +268,7 @@
 					running={tab.running}
 					output={tab.output}
 					error={tab.error}
+					sql={tab.resultSql}
 					editTarget={connection
 						? {
 								connectionId: tab.connectionId,

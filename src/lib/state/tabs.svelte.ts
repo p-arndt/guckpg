@@ -41,6 +41,8 @@ export class QueryTab extends TabBase {
 	maxRows = $state(1000);
 	/** The EXPLAIN output shown instead of results; null shows results. */
 	plan = $state<string | null>(null);
+	/** SQL that produced the current output, independent of later editor changes. */
+	resultSql = $state('');
 	/** Last executed text, re-run after saving grid edits. */
 	#lastRun: { text: string; from: number; inEditor: boolean } | null = null;
 
@@ -82,6 +84,7 @@ export class QueryTab extends TabBase {
 				text,
 				this.maxRows
 			);
+			this.resultSql = text;
 		} catch (e) {
 			this.output = null;
 			this.error = toAppError(e);

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
@@ -6,6 +7,14 @@ const { Tabs } = await import('./tabs.svelte');
 const { memoryStorage } = await import('./test-storage');
 
 describe('Tabs', () => {
+	it('keeps the executed SQL with its results when the editor changes', async () => {
+		vi.mocked(invoke).mockResolvedValueOnce({ results: [], elapsedMs: 1 });
+		const tabs = new Tabs();
+		const tab = tabs.openQuery('c1', 'db', 'select 1; select 2');
+		await tab.run(tab.sql, 0);
+		tab.sql = 'select 3';
+		expect(tab.resultSql).toBe('select 1; select 2');
+	});
 	it('keeps an applying table designer open and reuses its renamed table tab', async () => {
 		const tabs = new Tabs();
 		const table = tabs.openTable('c1', 'db', 'public', 'items');

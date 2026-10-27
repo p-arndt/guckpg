@@ -15,13 +15,15 @@ export function splitStatements(sql: string): Statement[] {
 	let start = 0;
 	let i = 0;
 	const n = sql.length;
+	let hasCode = false;
 
 	const push = (end: number) => {
 		let from = start;
 		let to = end;
 		while (from < to && /\s/.test(sql[from])) from++;
 		while (to > from && /\s/.test(sql[to - 1])) to--;
-		if (to > from) out.push({ from, to, text: sql.slice(from, to) });
+		if (hasCode) out.push({ from, to, text: sql.slice(from, to) });
+		hasCode = false;
 	};
 
 	while (i < n) {
@@ -45,6 +47,7 @@ export function splitStatements(sql: string): Statement[] {
 				} else i++;
 			}
 		} else if (c === "'") {
+			hasCode = true;
 			const escapes = i > 0 && /[eE]/.test(sql[i - 1]) && !/\w/.test(sql[i - 2] ?? '');
 			i++;
 			while (i < n) {
@@ -56,6 +59,7 @@ export function splitStatements(sql: string): Statement[] {
 				} else i++;
 			}
 		} else if (c === '"') {
+			hasCode = true;
 			i++;
 			while (i < n) {
 				if (sql[i] === '"' && sql[i + 1] === '"') i += 2;
@@ -65,6 +69,7 @@ export function splitStatements(sql: string): Statement[] {
 				} else i++;
 			}
 		} else if (c === '$' && !/\w/.test(sql[i - 1] ?? '')) {
+			hasCode = true;
 			const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i));
 			if (tag) {
 				const close = sql.indexOf(tag[0], i + tag[0].length);
@@ -74,7 +79,10 @@ export function splitStatements(sql: string): Statement[] {
 			push(i);
 			start = i + 1;
 			i++;
-		} else i++;
+		} else {
+			if (!/\s/.test(c)) hasCode = true;
+			i++;
+		}
 	}
 	push(n);
 	return out;

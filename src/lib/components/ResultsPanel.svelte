@@ -4,19 +4,30 @@
 	import TableIcon from '@lucide/svelte/icons/table-2';
 	import { errorMessage, type AppError, type QueryOutput } from '#lib/api.js';
 	import { formatCount, formatDuration } from '#lib/format.js';
+	import { splitStatements } from '#lib/sql-text.js';
 	import type { ComponentProps } from 'svelte';
 	import ResultGrid from './ResultGrid.svelte';
+	import SqlBlock from './SqlBlock.svelte';
 
 	interface Props {
 		running: boolean;
 		output: QueryOutput | null;
 		error: AppError | null;
+		sql?: string;
 		editTarget?: ComponentProps<typeof ResultGrid>['editTarget'];
 		onSaved?: () => void;
 		onDirtyChange?: (count: number) => void;
 	}
 
-	let { running, output, error, editTarget = null, onSaved, onDirtyChange }: Props = $props();
+	let {
+		running,
+		output,
+		error,
+		sql = '',
+		editTarget = null,
+		onSaved,
+		onDirtyChange
+	}: Props = $props();
 
 	let picked = $state<number | null>(null);
 
@@ -34,6 +45,10 @@
 
 	const index = $derived(picked ?? defaultIndex);
 	const current = $derived(output?.results[index]);
+	const statements = $derived.by(() => {
+		const parts = splitStatements(sql);
+		return parts.length === output?.results.length ? parts : [];
+	});
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -46,14 +61,19 @@
 							type="button"
 							role="tab"
 							aria-selected={i === index}
-							class="flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 transition-[background-color,color] duration-(--dur-micro) {i ===
+							class="flex h-6 max-w-64 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 transition-[background-color,color] duration-(--dur-micro) {i ===
 							index
 								? 'bg-hover text-foreground'
 								: 'hover:bg-hover/60 hover:text-foreground'}"
 							onclick={() => (picked = i)}
 						>
 							<span class="measured text-muted-foreground">{i + 1}</span>
-							<span>
+							{#if statements[i]}
+								<span class="truncate font-mono" title={statements[i].text}
+									>{statements[i].text.replace(/\s+/g, ' ')}</span
+								>
+							{/if}
+							<span class="shrink-0 text-muted-foreground">
 								<span class="measured">{formatCount(result.rowCount)}</span>
 								{result.columns.length ? 'rows' : 'affected'}
 							</span>
@@ -84,6 +104,17 @@
 				{/if}
 			</div>
 		</div>
+	{/if}
+	{#if output && output.results.length > 1 && statements[index] && !error}
+		<details class="shrink-0 border-b px-3 py-1.5 text-xs">
+			<summary class="cursor-pointer text-muted-foreground hover:text-foreground"
+				>Statement {index + 1}</summary
+			>
+			<SqlBlock
+				sql={statements[index].text}
+				class="max-h-32 overflow-auto py-2 text-xs whitespace-pre-wrap select-text"
+			/>
+		</details>
 	{/if}
 
 	<div class="min-h-0 flex-1">

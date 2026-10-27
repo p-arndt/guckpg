@@ -46,6 +46,11 @@ describe('splitStatements', () => {
 		expect(texts(' ; ;\n')).toEqual([]);
 	});
 
+	it('does not create statements for comments alone', () => {
+		expect(texts('select 1; /* comment */; -- last\n')).toEqual(['select 1']);
+		expect(texts('-- comment\n; select 2')).toEqual(['select 2']);
+	});
+
 	it('reports offsets into the script', () => {
 		const sql = 'select 1;\n\nselect 2;';
 		const [, second] = splitStatements(sql);

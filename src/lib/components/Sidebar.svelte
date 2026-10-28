@@ -150,7 +150,7 @@
 {#if connections.list.length}
 	<div class="relative shrink-0 px-2 pb-1.5">
 		<SearchIcon
-			class="pointer-events-none absolute top-1/2 left-4 mt-[-3px] size-3.5 -translate-y-1/2 text-muted-foreground"
+			class="pointer-events-none absolute top-1/2 left-4 mt-[-3px] size-4 -translate-y-1/2 text-muted-foreground"
 		/>
 		<input
 			bind:this={filterInput}

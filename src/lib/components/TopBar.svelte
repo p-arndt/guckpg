@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import BackupDialog from './BackupDialog.svelte';
 	import AppearanceSettings from './AppearanceSettings.svelte';
@@ -122,7 +123,7 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 				<DropdownMenu.Content align="start" class="w-56">
 					<DropdownMenu.Item onSelect={onNewQuery}>
 						<SquareTerminalIcon /> New query
-						<DropdownMenu.Shortcut>⌘T</DropdownMenu.Shortcut>
+						<DropdownMenu.Shortcut>{shortcut('T')}</DropdownMenu.Shortcut>
 					</DropdownMenu.Item>
 					<DropdownMenu.Sub>
 						<DropdownMenu.SubTrigger>
@@ -176,7 +177,7 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 	>
 		<SearchIcon class="size-3.5 shrink-0" />
 		<span class="truncate">Go to table, tab, connection…</span>
-		<kbd class="key ml-auto">⌘K</kbd>
+		<kbd class="key ml-auto">{shortcut('K')}</kbd>
 	</button>
 
 	<div class="flex flex-1 basis-0 items-center justify-end gap-1" data-tauri-drag-region>
@@ -185,7 +186,7 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 			variant="outline"
 			disabled={!context}
 			onclick={onNewQuery}
-			title="New query (⌘T)"
+			title="New query ({shortcut('T')})"
 		>
 			<SquareTerminalIcon /> New query
 		</Button>

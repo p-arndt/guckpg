@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
 	import { SvelteFlowProvider } from '@xyflow/svelte';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import PlayIcon from '@lucide/svelte/icons/play';
@@ -263,7 +264,7 @@
 							<PlayIcon class="fill-current" /> Run
 							<kbd
 								class="ml-1 rounded-[4px] bg-primary-foreground/15 px-1 text-[11px] leading-4 font-normal"
-								>⌘↵</kbd
+								>{shortcut('↵')}</kbd
 							>
 						</Button>
 					</div>

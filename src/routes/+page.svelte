@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
 	import { onMount } from 'svelte';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import SearchIcon from '@lucide/svelte/icons/search';
@@ -232,10 +233,10 @@
 										<kbd class="key ml-auto">{shortcut}</kbd>
 									</button>
 								{/snippet}
-								{@render action('New query', SquareTerminalIcon, '⌘T', newQuery)}
-								{@render action('Go to…', SearchIcon, '⌘K', () => (paletteOpen = true))}
+								{@render action('New query', SquareTerminalIcon, shortcut('T'), newQuery)}
+								{@render action('Go to…', SearchIcon, shortcut('K'), () => (paletteOpen = true))}
 								{#if tabs.closed.length}
-									{@render action('Reopen closed tab', HistoryIcon, '⌘⇧T', () =>
+									{@render action('Reopen closed tab', HistoryIcon, shortcut('T', true), () =>
 										tabs.reopenClosed((id) => !!connections.get(id))
 									)}
 								{/if}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import UndoIcon from '@lucide/svelte/icons/undo-2';
@@ -32,7 +33,7 @@
 			variant="ghost"
 			disabled={!edits.canUndo}
 			onclick={() => edits.undo()}
-			title="Undo (⌘Z)"
+			title="Undo ({shortcut('Z')})"
 		>
 			<UndoIcon />
 		</Button>
@@ -41,7 +42,7 @@
 			variant="ghost"
 			disabled={!edits.canRedo}
 			onclick={() => edits.redo()}
-			title="Redo (⇧⌘Z)"
+			title="Redo ({shortcut('Z', true)})"
 		>
 			<RedoIcon />
 		</Button>
@@ -57,7 +58,7 @@
 			</Button>
 			<Button size="xs" disabled={saving} onclick={onSave}>
 				{#if saving}<LoaderIcon class="animate-spin" />{/if}
-				Save <span class="measured opacity-70">⌘S</span>
+				Save <span class="measured opacity-70">{shortcut('S')}</span>
 			</Button>
 		{:else}
 			<span class="ml-auto flex min-w-0 items-center gap-4 truncate text-muted-foreground">
@@ -66,7 +67,7 @@
 					><kbd class="key">⌫</kbd> deletes a row</span
 				>
 				<span class="flex items-center gap-1.5 whitespace-nowrap"
-					><kbd class="key">⌘V</kbd> pastes from spreadsheets</span
+					><kbd class="key">{shortcut('V')}</kbd> pastes from spreadsheets</span
 				>
 				<span class="measured whitespace-nowrap text-ink-2">{source.schema}.{source.table}</span>
 			</span>

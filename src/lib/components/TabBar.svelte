@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
 	import XIcon from '@lucide/svelte/icons/x';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import TableIcon from '@lucide/svelte/icons/table-2';
@@ -69,8 +70,6 @@
 		dragging = null;
 		dropIndex = null;
 	}
-
-	const modKey = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform) ? '⌘' : 'Ctrl+';
 </script>
 
 <div
@@ -170,7 +169,7 @@
 							class="flex size-5 items-center justify-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 {active
 								? 'opacity-100'
 								: ''}"
-							title="Close ({modKey}W)"
+							title="Close ({shortcut('W')})"
 							onclick={() => tabs.requestClose(tab.id)}
 						>
 							<XIcon class="size-3" />
@@ -185,7 +184,7 @@
 					<ContextMenu.Separator />
 				{/if}
 				<ContextMenu.Item onSelect={() => tabs.requestClose(tab.id)}>
-					Close <ContextMenu.Shortcut>{modKey}W</ContextMenu.Shortcut>
+					Close <ContextMenu.Shortcut>{shortcut('W')}</ContextMenu.Shortcut>
 				</ContextMenu.Item>
 				<ContextMenu.Item
 					disabled={tabs.items.length < 2}
@@ -205,7 +204,7 @@
 					disabled={!tabs.closed.length}
 					onSelect={() => tabs.reopenClosed((id) => !!connections.get(id))}
 				>
-					Reopen closed tab <ContextMenu.Shortcut>{modKey}⇧T</ContextMenu.Shortcut>
+					Reopen closed tab <ContextMenu.Shortcut>{shortcut('T', true)}</ContextMenu.Shortcut>
 				</ContextMenu.Item>
 			</ContextMenu.Content>
 		</ContextMenu.Root>
@@ -214,7 +213,7 @@
 		type="button"
 		aria-label="New query"
 		class="sticky right-0 flex size-7 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground"
-		title="New query ({modKey}T)"
+		title="New query ({shortcut('T')})"
 		onclick={onNewQuery}
 	>
 		<PlusIcon class="size-3.5" />

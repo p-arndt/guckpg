@@ -27,21 +27,20 @@ jobs:
       - name: Verify version and read release notes
         id: stamp
         uses: p-arndt/stamp@f4b7acfb14f4ebe4b592b60d13b90c954474df7e # v0.5.0
-      - name: Create draft release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          draft: true
-          prerelease: ${{ steps.stamp.outputs.prerelease }}
-          body_path: ${{ steps.stamp.outputs.notes-file }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: installers-*
           path: release-assets
           merge-multiple: true
-      - name: Upload installers
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+      # Installers are attached in the same step, so the release never goes public without them.
+      - name: Publish release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          draft: false
+          prerelease: ${{ steps.stamp.outputs.prerelease }}
+          body_path: ${{ steps.stamp.outputs.notes-file }}
+          files: release-assets/*
+          fail_on_unmatched_files: true
 
   build:
     permissions:

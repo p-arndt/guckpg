@@ -1,1 +1,0 @@
-Platform-specific keyboard shortcuts

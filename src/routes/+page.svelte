@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { shortcut } from '#lib/shortcut.js';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import HistoryIcon from '@lucide/svelte/icons/history';
@@ -29,6 +29,8 @@
 
 	$effect(() => appearance.apply(document.documentElement));
 
+	let sidebarOpen = $state(true);
+	let sidebarPane = $state<ReturnType<typeof Resizable.Pane> | null>(null);
 	let aiOpen = $state(false);
 	let aiPane = $state<ReturnType<typeof Resizable.Pane> | null>(null);
 	let aiSize = 26;
@@ -95,6 +97,17 @@
 		else toast.info('Connect to a database first');
 	}
 
+	function toggleSidebar() {
+		if (sidebarPane?.isCollapsed()) sidebarPane.expand();
+		else sidebarPane?.collapse();
+	}
+
+	async function focusConnections() {
+		if (sidebarPane?.isCollapsed()) sidebarPane.expand();
+		await tick();
+		sidebarView?.focusFilter();
+	}
+
 	function onContextMenu(e: MouseEvent) {
 		const target = e.target instanceof Element ? e.target : null;
 		const hasSelection = !!window.getSelection()?.toString();
@@ -118,7 +131,10 @@
 		const mod = e.metaKey || e.ctrlKey;
 		if (!mod) return;
 		const key = e.key.toLowerCase();
-		if (key === 'k' || (key === 'p' && !e.shiftKey)) {
+		if (key === 'b' && !e.shiftKey && !e.altKey) {
+			e.preventDefault();
+			toggleSidebar();
+		} else if (key === 'k' || (key === 'p' && !e.shiftKey)) {
 			e.preventDefault();
 			paletteOpen = !paletteOpen;
 		} else if (key === 't' && e.shiftKey) {
@@ -139,7 +155,7 @@
 			tabs.cycle(e.key === 'ArrowRight' ? 1 : -1);
 		} else if (key === 'f' && e.shiftKey) {
 			e.preventDefault();
-			sidebarView?.focusFilter();
+			void focusConnections();
 		}
 	}
 </script>
@@ -167,20 +183,32 @@
 		onOpenPalette={() => (paletteOpen = true)}
 		onToggleAi={() => (aiOpen = !aiOpen)}
 		{aiOpen}
+		{sidebarOpen}
+		onToggleSidebar={toggleSidebar}
 	/>
 	<div class="flex min-h-0 flex-1 pr-2 pb-2">
-		<Resizable.PaneGroup direction="horizontal" autoSaveId="guckpg.layout" class="min-h-0 flex-1">
+		<Resizable.PaneGroup
+			direction="horizontal"
+			autoSaveId="guckpg.layout"
+			class="sidebar-layout min-h-0 flex-1"
+		>
 			<Resizable.Pane
+				bind:this={sidebarPane}
 				id="sidebar"
 				order={1}
 				defaultSize={20}
 				minSize={12}
 				maxSize={45}
-				class="flex flex-col"
+				collapsible
+				collapsedSize={0}
+				onCollapse={() => (sidebarOpen = false)}
+				onExpand={() => (sidebarOpen = true)}
+				inert={!sidebarOpen}
+				class="flex flex-col overflow-hidden"
 			>
 				<Sidebar bind:this={sidebarView} onEdit={edit} onDelete={(c) => (deleting = c)} />
 			</Resizable.Pane>
-			<Resizable.Handle variant="gap" />
+			<Resizable.Handle variant="gap" disabled={!sidebarOpen} class={sidebarOpen ? '' : 'hidden'} />
 			<Resizable.Pane
 				id="main"
 				order={2}
@@ -276,7 +304,7 @@
 	bind:open={paletteOpen}
 	onNewQuery={newQuery}
 	onNewConnection={() => edit(null)}
-	onFilterConnections={() => sidebarView?.focusFilter()}
+	onFilterConnections={focusConnections}
 />
 
 <AlertDialog.Root
@@ -299,3 +327,26 @@
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
+
+<style>
+	@media (prefers-reduced-motion: no-preference) {
+		:global(
+			.sidebar-layout:has([data-pane-id='sidebar'][data-pane-state='collapsing'])
+				[data-pane-id='sidebar']
+		),
+		:global(
+			.sidebar-layout:has([data-pane-id='sidebar'][data-pane-state='expanding'])
+				[data-pane-id='sidebar']
+		),
+		:global(
+			.sidebar-layout:has([data-pane-id='sidebar'][data-pane-state='collapsing'])
+				[data-pane-id='main']
+		),
+		:global(
+			.sidebar-layout:has([data-pane-id='sidebar'][data-pane-state='expanding'])
+				[data-pane-id='main']
+		) {
+			transition: flex-grow 200ms ease;
+		}
+	}
+</style>

@@ -6,6 +6,7 @@
 	import SchemaCompare from './SchemaCompare.svelte';
 	import SessionMonitor from './SessionMonitor.svelte';
 	import BotIcon from '@lucide/svelte/icons/bot';
+	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
@@ -28,9 +29,12 @@
 		onOpenPalette: () => void;
 		onToggleAi: () => void;
 		aiOpen: boolean;
+		sidebarOpen: boolean;
+		onToggleSidebar: () => void;
 	}
 
-	let { onNewQuery, onOpenPalette, onToggleAi, aiOpen }: Props = $props();
+	let { onNewQuery, onOpenPalette, onToggleAi, aiOpen, sidebarOpen, onToggleSidebar }: Props =
+		$props();
 
 	/** Tauri on macOS draws the traffic lights over the page (`titleBarStyle: Overlay`). */
 	const overlayTitleBar =
@@ -98,6 +102,16 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 	class="flex h-12 shrink-0 items-center gap-3 pr-2 {overlayTitleBar ? 'pl-[84px]' : 'pl-3'}"
 	data-tauri-drag-region
 >
+	<Button
+		size="icon-sm"
+		variant="ghost"
+		class="aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-hover aria-expanded:hover:text-foreground"
+		aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+		aria-expanded={sidebarOpen}
+		aria-controls="sidebar"
+		title={`${sidebarOpen ? 'Hide' : 'Show'} sidebar (${shortcut('B')})`}
+		onclick={onToggleSidebar}><PanelLeftIcon /></Button
+	>
 	<span class="text-[15px] font-semibold tracking-[-0.02em]" data-tauri-drag-region>guckpg</span>
 
 	<div class="flex min-w-0 flex-1 basis-0 items-center gap-2 text-sm" data-tauri-drag-region>

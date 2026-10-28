@@ -327,9 +327,14 @@
 					{/if}
 				</button>
 			{:else}
-				<p class="px-3 py-10 text-center text-[13px] text-muted-foreground">
-					{loading > 0 ? 'Loading tables…' : `Nothing matches “${query}”.`}
-				</p>
+				<div class="px-3 py-10 text-center text-[13px] text-muted-foreground">
+					<p>{loading > 0 ? 'Loading tables…' : `Nothing matches “${query}”.`}</p>
+					{#if !loading && query}<button
+							type="button"
+							class="mt-2 rounded-md px-2 py-1 text-foreground hover:bg-hover"
+							onclick={() => (query = '')}>Clear search</button
+						>{/if}
+				</div>
 			{/each}
 		</div>
 		<div class="flex items-center gap-4 border-t px-4 py-2 text-xs text-muted-foreground">

@@ -4,6 +4,9 @@
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import HistoryIcon from '@lucide/svelte/icons/history';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import NavicatImport from '#lib/components/NavicatImport.svelte';
 	import { toast } from 'svelte-sonner';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
@@ -238,11 +241,27 @@
 					<div class="flex h-full flex-col items-center justify-center px-10 pb-[10vh]">
 						<div class="flex w-full max-w-sm flex-col gap-5">
 							<div class="flex flex-col gap-1.5">
-								<h1 class="text-xl font-medium tracking-[-0.015em]">Nothing open yet</h1>
+								<h1 class="text-xl font-medium tracking-[-0.015em]">
+									{connections.list.length ? 'Nothing open yet' : 'Welcome to guckpg'}
+								</h1>
 								<p class="text-ink-2">
-									Pick a connection on the left, then double-click a table or start a query.
+									{connections.list.length
+										? 'Pick a connection in the sidebar, then double-click a table or start a query.'
+										: 'Add a connection to browse your database and run queries.'}
 								</p>
 							</div>
+							{#if !connections.list.length}
+								<div class="flex flex-wrap gap-2">
+									<Button size="sm" onclick={() => edit(null)}><PlusIcon /> Add connection</Button>
+									<NavicatImport labelled />
+								</div>
+							{:else if !sidebarOpen}
+								<div>
+									<Button size="sm" variant="outline" onclick={toggleSidebar}
+										>Show connections</Button
+									>
+								</div>
+							{/if}
 							<div class="flex flex-col">
 								{#snippet action(
 									label: string,

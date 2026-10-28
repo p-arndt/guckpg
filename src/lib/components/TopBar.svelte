@@ -126,7 +126,7 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 							title="Connection actions"
 						>
 							<ServerIcon
-								class="size-3.5 shrink-0 text-muted-foreground"
+								class="size-4 shrink-0 text-muted-foreground"
 								style={context.connection.color ? `color: ${context.connection.color}` : ''}
 							/>
 							<span class="truncate font-medium">{context.connection.name}</span>
@@ -189,7 +189,7 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 		class="flex h-8 w-full max-w-md min-w-40 flex-[2] basis-0 items-center gap-2 rounded-lg border bg-background px-2.5 text-[13px] text-muted-foreground shadow-panel transition-[border-color,color] duration-(--dur-micro) hover:border-rule-2 hover:text-foreground"
 		onclick={onOpenPalette}
 	>
-		<SearchIcon class="size-3.5 shrink-0" />
+		<SearchIcon class="size-4 shrink-0" />
 		<span class="truncate">Go to table, tab, connection…</span>
 		<kbd class="key ml-auto">{shortcut('K')}</kbd>
 	</button>

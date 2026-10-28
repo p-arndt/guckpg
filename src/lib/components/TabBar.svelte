@@ -7,6 +7,9 @@
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import UserIcon from '@lucide/svelte/icons/user';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
+	import ListIcon from '@lucide/svelte/icons/list';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
+	import { Button } from '#lib/components/ui/button/index.js';
 	import { tick } from 'svelte';
 	import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
 	import { connections } from '#lib/state/connections.svelte.js';
@@ -72,150 +75,183 @@
 	}
 </script>
 
-<div
-	class="flex h-10 shrink-0 scroll-px-1.5 scroll-pe-9 [scrollbar-width:none] items-center gap-0.5 overflow-x-auto overflow-y-hidden border-b px-1.5 [&::-webkit-scrollbar]:hidden"
-	bind:this={strip}
-	onwheel={onWheel}
-	role="tablist"
-	tabindex="-1"
-	ondragover={(e) => dragging && e.preventDefault()}
-	ondrop={onDrop}
->
-	{#each tabs.items as tab, index (tab.id)}
-		{@const color = connections.get(tab.connectionId)?.color}
-		{@const active = tab.id === tabs.activeId}
-		<ContextMenu.Root>
-			<ContextMenu.Trigger>
-				{#snippet child({ props })}
-					<div
-						{...props}
-						role="presentation"
-						data-tab-id={tab.id}
-						draggable={renaming !== tab.id}
-						ondragstart={(e) => {
-							dragging = tab.id;
-							e.dataTransfer?.setData('text/plain', tab.title);
-							if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-						}}
-						ondragend={() => {
-							dragging = null;
-							dropIndex = null;
-						}}
-						ondragover={(e) => onDragOver(e, index)}
-						class="group relative flex h-7 max-w-60 shrink-0 items-center gap-1 rounded-lg pr-0.5 pl-2.5 text-[13px] transition-[background-color,color] duration-(--dur-micro) {active
-							? 'bg-hover text-foreground'
-							: 'text-muted-foreground hover:bg-hover/60 hover:text-foreground'} {dragging ===
-						tab.id
-							? 'opacity-50'
-							: ''}"
-					>
-						{#if dropIndex === index && dragging !== tab.id}
-							<span class="absolute inset-y-1 -left-0.5 w-0.5 rounded-full bg-signal"></span>
-						{:else if dropIndex === index + 1 && index === tabs.items.length - 1}
-							<span class="absolute inset-y-1 -right-0.5 w-0.5 rounded-full bg-signal"></span>
-						{/if}
-						{#if renaming === tab.id}
-							<SquareTerminalIcon class="size-3.5 shrink-0" />
-							<input
-								id="rename-{tab.id}"
-								bind:value={renameValue}
-								aria-label="Tab name"
-								class="h-6 w-36 rounded-md border border-input bg-background px-1.5 text-[13px]"
-								spellcheck="false"
-								onblur={() => finishRename(true)}
-								onkeydown={(e) => {
-									if (e.key === 'Enter') finishRename(true);
-									else if (e.key === 'Escape') finishRename(false);
-								}}
-							/>
-						{:else}
-							<button
-								role="tab"
-								aria-selected={active}
-								class="flex h-full min-w-0 items-center gap-1.5 rounded-sm"
-								onclick={() => (tabs.activeId = tab.id)}
-								ondblclick={() => startRename(tab)}
-								onauxclick={(e) => {
-									if (e.button === 1) void tabs.requestClose(tab.id);
-								}}
-								title="{tab.title} in {tab.database}{tab.kind === 'query'
-									? ', double-click to rename'
-									: ''}"
-							>
-								{#if tab.running}
-									<LoaderIcon class="size-3.5 shrink-0 animate-spin text-cool" />
-								{:else if tab.kind === 'table'}
-									<TableIcon class="size-3.5 shrink-0" style={color ? `color: ${color}` : ''} />
-								{:else if tab.kind === 'role'}
-									<UserIcon class="size-3.5 shrink-0" style={color ? `color: ${color}` : ''} />
-								{:else if tab.kind === 'diagram'}
-									<NetworkIcon class="size-3.5 shrink-0" style={color ? `color: ${color}` : ''} />
-								{:else}
-									<SquareTerminalIcon
-										class="size-3.5 shrink-0"
-										style={color ? `color: ${color}` : ''}
-									/>
-								{/if}
-								<span class="truncate">{tab.title}</span>
-								{#if tab.dirty}
-									<span class="size-1.5 shrink-0 rounded-full bg-signal" title="Unsaved changes"
-									></span>
-								{/if}
-							</button>
-						{/if}
-						<button
-							type="button"
-							aria-label="Close {tab.title}"
-							class="flex size-5 items-center justify-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 {active
-								? 'opacity-100'
-								: ''}"
-							title="Close ({shortcut('W')})"
-							onclick={() => tabs.requestClose(tab.id)}
-						>
-							<XIcon class="size-3" />
-						</button>
-					</div>
-				{/snippet}
-			</ContextMenu.Trigger>
-			<ContextMenu.Content class="w-56">
-				{#if tab.kind === 'query'}
-					<ContextMenu.Item onSelect={() => startRename(tab)}>Rename…</ContextMenu.Item>
-					<ContextMenu.Item onSelect={() => tabs.duplicate(tab.id)}>Duplicate</ContextMenu.Item>
-					<ContextMenu.Separator />
-				{/if}
-				<ContextMenu.Item onSelect={() => tabs.requestClose(tab.id)}>
-					Close <ContextMenu.Shortcut>{shortcut('W')}</ContextMenu.Shortcut>
-				</ContextMenu.Item>
-				<ContextMenu.Item
-					disabled={tabs.items.length < 2}
-					onSelect={() => tabs.closeOthers(tab.id)}
-				>
-					Close others
-				</ContextMenu.Item>
-				<ContextMenu.Item
-					disabled={index === tabs.items.length - 1}
-					onSelect={() => tabs.closeToRight(tab.id)}
-				>
-					Close to the right
-				</ContextMenu.Item>
-				<ContextMenu.Item onSelect={() => tabs.closeAll()}>Close all</ContextMenu.Item>
-				<ContextMenu.Separator />
-				<ContextMenu.Item
-					disabled={!tabs.closed.length}
-					onSelect={() => tabs.reopenClosed((id) => !!connections.get(id))}
-				>
-					Reopen closed tab <ContextMenu.Shortcut>{shortcut('T', true)}</ContextMenu.Shortcut>
-				</ContextMenu.Item>
-			</ContextMenu.Content>
-		</ContextMenu.Root>
-	{/each}
-	<button
-		type="button"
-		aria-label="New query"
-		class="sticky right-0 flex size-7 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground"
-		title="New query ({shortcut('T')})"
-		onclick={onNewQuery}
+<div class="flex h-10 shrink-0 items-center border-b">
+	<div
+		class="flex h-full min-w-0 flex-1 scroll-px-1.5 scroll-pe-9 [scrollbar-width:none] items-center gap-0.5 overflow-x-auto overflow-y-hidden px-1.5 [&::-webkit-scrollbar]:hidden"
+		bind:this={strip}
+		onwheel={onWheel}
+		role="tablist"
+		tabindex="-1"
+		ondragover={(e) => dragging && e.preventDefault()}
+		ondrop={onDrop}
 	>
-		<PlusIcon class="size-3.5" />
-	</button>
+		{#each tabs.items as tab, index (tab.id)}
+			{@const connection = connections.get(tab.connectionId)}
+			{@const color = connection?.color}
+			{@const active = tab.id === tabs.activeId}
+			<ContextMenu.Root>
+				<ContextMenu.Trigger>
+					{#snippet child({ props })}
+						<div
+							{...props}
+							role="presentation"
+							data-tab-id={tab.id}
+							draggable={renaming !== tab.id}
+							ondragstart={(e) => {
+								dragging = tab.id;
+								e.dataTransfer?.setData('text/plain', tab.title);
+								if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+							}}
+							ondragend={() => {
+								dragging = null;
+								dropIndex = null;
+							}}
+							ondragover={(e) => onDragOver(e, index)}
+							class="group relative flex h-7 max-w-80 shrink-0 items-center gap-1 rounded-lg pr-0.5 pl-2.5 text-[13px] transition-[background-color,color] duration-(--dur-micro) {active
+								? 'bg-hover text-foreground'
+								: 'text-muted-foreground hover:bg-hover/60 hover:text-foreground'} {dragging ===
+							tab.id
+								? 'opacity-50'
+								: ''}"
+						>
+							{#if dropIndex === index && dragging !== tab.id}
+								<span class="absolute inset-y-1 -left-0.5 w-0.5 rounded-full bg-signal"></span>
+							{:else if dropIndex === index + 1 && index === tabs.items.length - 1}
+								<span class="absolute inset-y-1 -right-0.5 w-0.5 rounded-full bg-signal"></span>
+							{/if}
+							{#if renaming === tab.id}
+								<SquareTerminalIcon class="size-4 shrink-0" />
+								<input
+									id="rename-{tab.id}"
+									bind:value={renameValue}
+									aria-label="Tab name"
+									class="h-6 w-36 rounded-md border border-input bg-background px-1.5 text-[13px]"
+									spellcheck="false"
+									onblur={() => finishRename(true)}
+									onkeydown={(e) => {
+										if (e.key === 'Enter') finishRename(true);
+										else if (e.key === 'Escape') finishRename(false);
+									}}
+								/>
+							{:else}
+								<button
+									role="tab"
+									aria-selected={active}
+									class="flex h-full min-w-0 items-center gap-1.5 rounded-sm"
+									onclick={() => (tabs.activeId = tab.id)}
+									ondblclick={() => startRename(tab)}
+									onauxclick={(e) => {
+										if (e.button === 1) void tabs.requestClose(tab.id);
+									}}
+									title="{tab.title} in {tab.database}{tab.kind === 'query'
+										? ', double-click to rename'
+										: ''}"
+								>
+									{#if tab.running}
+										<LoaderIcon class="size-4 shrink-0 animate-spin text-cool" />
+									{:else if tab.kind === 'table'}
+										<TableIcon class="size-4 shrink-0" style={color ? `color: ${color}` : ''} />
+									{:else if tab.kind === 'role'}
+										<UserIcon class="size-4 shrink-0" style={color ? `color: ${color}` : ''} />
+									{:else if tab.kind === 'diagram'}
+										<NetworkIcon class="size-4 shrink-0" style={color ? `color: ${color}` : ''} />
+									{:else}
+										<SquareTerminalIcon
+											class="size-4 shrink-0"
+											style={color ? `color: ${color}` : ''}
+										/>
+									{/if}
+									<span class="truncate">{tab.title}</span>
+									{#if active && connection}
+										<span class="max-w-36 truncate text-xs text-muted-foreground"
+											>{connection.name} / {tab.database}</span
+										>
+									{/if}
+									{#if tab.dirty}
+										<span class="size-1.5 shrink-0 rounded-full bg-signal" title="Unsaved changes"
+										></span>
+									{/if}
+								</button>
+							{/if}
+							<button
+								type="button"
+								aria-label="Close {tab.title}"
+								class="flex size-5 items-center justify-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 {active
+									? 'opacity-100'
+									: ''}"
+								title="Close ({shortcut('W')})"
+								onclick={() => tabs.requestClose(tab.id)}
+							>
+								<XIcon class="size-3" />
+							</button>
+						</div>
+					{/snippet}
+				</ContextMenu.Trigger>
+				<ContextMenu.Content class="w-56">
+					{#if tab.kind === 'query'}
+						<ContextMenu.Item onSelect={() => startRename(tab)}>Rename…</ContextMenu.Item>
+						<ContextMenu.Item onSelect={() => tabs.duplicate(tab.id)}>Duplicate</ContextMenu.Item>
+						<ContextMenu.Separator />
+					{/if}
+					<ContextMenu.Item onSelect={() => tabs.requestClose(tab.id)}>
+						Close <ContextMenu.Shortcut>{shortcut('W')}</ContextMenu.Shortcut>
+					</ContextMenu.Item>
+					<ContextMenu.Item
+						disabled={tabs.items.length < 2}
+						onSelect={() => tabs.closeOthers(tab.id)}
+					>
+						Close others
+					</ContextMenu.Item>
+					<ContextMenu.Item
+						disabled={index === tabs.items.length - 1}
+						onSelect={() => tabs.closeToRight(tab.id)}
+					>
+						Close to the right
+					</ContextMenu.Item>
+					<ContextMenu.Item onSelect={() => tabs.closeAll()}>Close all</ContextMenu.Item>
+					<ContextMenu.Separator />
+					<ContextMenu.Item
+						disabled={!tabs.closed.length}
+						onSelect={() => tabs.reopenClosed((id) => !!connections.get(id))}
+					>
+						Reopen closed tab <ContextMenu.Shortcut>{shortcut('T', true)}</ContextMenu.Shortcut>
+					</ContextMenu.Item>
+				</ContextMenu.Content>
+			</ContextMenu.Root>
+		{/each}
+		<button
+			type="button"
+			aria-label="New query"
+			class="sticky right-0 flex size-7 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground"
+			title="New query ({shortcut('T')})"
+			onclick={onNewQuery}
+		>
+			<PlusIcon class="size-3.5" />
+		</button>
+	</div>
+
+	<DropdownMenu.Root>
+		<DropdownMenu.Trigger>
+			{#snippet child({ props })}
+				<Button
+					{...props}
+					size="icon-sm"
+					variant="ghost"
+					aria-label="All open tabs"
+					title="All open tabs"><ListIcon /></Button
+				>
+			{/snippet}
+		</DropdownMenu.Trigger>
+		<DropdownMenu.Content align="end" class="max-h-80 w-72 overflow-y-auto">
+			<DropdownMenu.Label>Open tabs</DropdownMenu.Label>
+			{#each tabs.items as tab (tab.id)}
+				<DropdownMenu.Item onSelect={() => (tabs.activeId = tab.id)}>
+					<span class="min-w-0 flex-1 truncate">{tab.title}</span>
+					<span class="max-w-32 truncate text-xs text-muted-foreground"
+						>{connections.get(tab.connectionId)?.name} / {tab.database}</span
+					>
+				</DropdownMenu.Item>
+			{/each}
+		</DropdownMenu.Content>
+	</DropdownMenu.Root>
 </div>

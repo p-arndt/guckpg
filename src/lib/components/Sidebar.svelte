@@ -29,6 +29,11 @@
 		sidebarLayout(connections.list, sidebar.folders).folders.map((f) => f.name)
 	);
 	const filtering = $derived(sidebar.filter.trim() !== '');
+	const connected = $derived(
+		[...layout.folders.flatMap((folder) => folder.connections), ...layout.loose].filter(
+			(c) => connections.status[c.id] === 'connected'
+		)
+	);
 
 	export function focusFilter() {
 		filterInput?.focus();
@@ -121,10 +126,11 @@
 	}
 </script>
 
-{#snippet connectionNode(connection: ConnectionConfig, depth: number)}
+{#snippet connectionNode(connection: ConnectionConfig, depth: number, showFolder = false)}
 	<ConnectionNode
 		{connection}
 		{depth}
+		{showFolder}
 		folders={folderNames}
 		{onEdit}
 		{onDelete}
@@ -187,6 +193,17 @@
 	tabindex="-1"
 	onkeydown={onTreeKeydown}
 >
+	{#if connected.length}
+		<p role="presentation" class="px-1.5 pt-1 pb-1 text-xs font-medium text-muted-foreground">
+			Connected
+		</p>
+		{#each connected as connection (connection.id)}
+			{@render connectionNode(connection, 0, true)}
+		{/each}
+		<p role="presentation" class="px-1.5 pt-3 pb-1 text-xs font-medium text-muted-foreground">
+			Connections
+		</p>
+	{/if}
 	{#each layout.folders as folder (folder.name)}
 		<FolderNode
 			name={folder.name}
@@ -196,12 +213,15 @@
 			onRemove={remove}
 			onDropConnection={(id, name) => move(id, name, null)}
 		>
-			{#each folder.connections as connection (connection.id)}
+			{#each folder.connections.filter((c) => connections.status[c.id] !== 'connected') as connection (connection.id)}
 				{@render connectionNode(connection, 1)}
 			{/each}
+			{#if folder.connections.length && folder.connections.every((c) => connections.status[c.id] === 'connected')}
+				<p class="py-1 pl-11 text-xs text-muted-foreground">Connected above</p>
+			{/if}
 		</FolderNode>
 	{/each}
-	{#each layout.loose as connection (connection.id)}
+	{#each layout.loose.filter((c) => connections.status[c.id] !== 'connected') as connection (connection.id)}
 		{@render connectionNode(connection, 0)}
 	{/each}
 
@@ -213,9 +233,10 @@
 			</Button>
 		</div>
 	{:else if filtering && !layout.folders.length && !layout.loose.length}
-		<p class="px-2.5 py-4 text-[13px] text-muted-foreground">
-			Nothing matches “{sidebar.filter}”.
-		</p>
+		<div class="px-2.5 py-4 text-[13px] text-muted-foreground">
+			<p>Nothing matches “{sidebar.filter}”.</p>
+			<Button size="xs" variant="ghost" onclick={() => (sidebar.filter = '')}>Clear filter</Button>
+		</div>
 	{/if}
 
 	<!-- Room to drop a connection out of its folder. -->

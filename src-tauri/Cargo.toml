@@ -1,6 +1,6 @@
 [package]
 name = "guckpg"
-version = "0.2.0"
+version = "0.2.1"
 description = "Postgres client for the desktop"
 authors = ["p-arndt"]
 license = "MIT"

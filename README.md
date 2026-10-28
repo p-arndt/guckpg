@@ -96,4 +96,4 @@ just release-dry
 just release patch              # or minor / major
 ```
 
-Run from a clean `main` branch with an `origin` remote and GitHub authentication. Stamp commits and pushes the release tag. CI and installer builds run in parallel; once both pass, the workflow creates a draft release and uploads the installers for review.
+Run from a clean `main` branch with an `origin` remote and GitHub authentication. Stamp commits and pushes the release tag. CI and installer builds run in parallel; once both pass, the workflow publishes the release with the installers attached. Record user-facing changes with `just note fixed "…"`; the next release puts them into `CHANGELOG.md` and the release notes.

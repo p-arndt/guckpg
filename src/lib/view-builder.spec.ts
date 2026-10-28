@@ -17,7 +17,7 @@ describe('createViewSql', () => {
 });
 
 import { buildSql } from './query-builder.js';
-import { importViewQuery, replaceViewSql } from './view-builder.js';
+import { importViewQuery, replaceViewSql, viewEditorContent } from './view-builder.js';
 
 const tables = [
 	{ schema: 'public', name: 'customers', columns: ['id', 'name'] },
@@ -333,5 +333,49 @@ describe('PostgreSQL 18 view definitions', () => {
 		);
 		expect(model).not.toBeNull();
 		expect(buildSql(model!).sql).toContain('HAVING pg_catalog.COUNT(DISTINCT orders.id) > 1');
+	});
+});
+
+describe('boolean view filters', () => {
+	const boolTables = [
+		{ schema: 'public', name: 'customers', columns: ['id', 'active', 'verified'] }
+	];
+	const boolSources = [{ schema: 'public', name: 'customers' }];
+	it('imports a bare boolean filter from PostgreSQL', () => {
+		const model = importViewQuery(
+			'SELECT customers.id FROM customers WHERE customers.active;',
+			boolTables,
+			boolSources
+		);
+		expect(model && buildSql(model).sql).toContain('WHERE customers.active IS TRUE');
+	});
+	it('preserves boolean tests in grouped expressions', () => {
+		const model = importViewQuery(
+			'SELECT customers.id FROM customers WHERE (NOT customers.active OR customers.verified IS NOT TRUE);',
+			boolTables,
+			boolSources
+		);
+		expect(model && buildSql(model).sql).toContain(
+			'WHERE (customers.active IS FALSE\n  OR customers.verified IS NOT TRUE)'
+		);
+	});
+});
+
+describe('view SQL editor handoff', () => {
+	it('preserves existing editor text and replaces the generated view statement on later handoffs', () => {
+		const first = viewEditorContent(
+			'SELECT 1;',
+			null,
+			null,
+			'CREATE OR REPLACE VIEW v AS SELECT 1;'
+		);
+		expect(first.sql).toBe('SELECT 1;\n\nCREATE OR REPLACE VIEW v AS SELECT 1;\n');
+		const next = viewEditorContent(
+			first.sql,
+			first.sql,
+			first.prefix,
+			'CREATE OR REPLACE VIEW v AS SELECT 2;'
+		);
+		expect(next.sql).toBe('SELECT 1;\n\nCREATE OR REPLACE VIEW v AS SELECT 2;\n');
 	});
 });

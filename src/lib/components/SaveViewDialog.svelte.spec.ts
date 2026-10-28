@@ -28,12 +28,21 @@ beforeEach(() => {
 
 describe('save as view', () => {
 	it('previews and creates the view in the selected schema on an isolated connection', async () => {
+		const details = {
+			query: 'SELECT 1;',
+			options: '',
+			sources: [],
+			searchPath: ['pg_catalog', 'public']
+		};
+		viewDetails.mockResolvedValue(details);
+		const onCreated = vi.fn();
 		render(SaveViewDialog, {
 			open: true,
 			connectionId: 'db',
 			database: 'app',
 			query: 'SELECT 1;',
-			defaultSchema: 'sales'
+			defaultSchema: 'sales',
+			onCreated
 		});
 		await screen.findByRole('combobox', { name: 'Schema' });
 		await waitFor(() => expect(schemas).toHaveBeenCalledWith('db', 'app'));
@@ -52,6 +61,7 @@ describe('save as view', () => {
 		]);
 		await waitFor(() => expect(closeTab).toHaveBeenCalledWith(id));
 		expect(refresh).toHaveBeenCalledWith('db');
+		expect(onCreated).toHaveBeenCalledWith('sales', 'report', details);
 	});
 	it('prevents creation on a read-only connection', async () => {
 		get.mockReturnValue({ readOnly: true });

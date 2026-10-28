@@ -17,7 +17,8 @@
 		query,
 		defaultSchema = '',
 		problems = [],
-		editingView = null
+		editingView = null,
+		onCreated = () => {}
 	}: {
 		open: boolean;
 		connectionId: string;
@@ -26,6 +27,7 @@
 		defaultSchema?: string;
 		problems?: string[];
 		editingView?: { database: string; schema: string; name: string; details: ViewDetails } | null;
+		onCreated?: (schema: string, name: string, details: ViewDetails | null) => void;
 	} = $props();
 	let schemas = $state<string[]>([]);
 	let schema = $state('');
@@ -106,6 +108,15 @@
 				} catch {
 					/* A later save will detect stale details and require reopening. */
 				}
+			}
+			if (!editingView) {
+				let createdDetails: ViewDetails | null = null;
+				try {
+					createdDetails = await api.viewDetails(connectionId, database, schema, name.trim());
+				} catch {
+					/* Creating the view succeeded even if a follow-up read fails. */
+				}
+				onCreated(schema, name.trim(), createdDetails);
 			}
 			connections.refresh(connectionId);
 			toast.success(`${editingView ? 'Updated' : 'Created'} view ${name.trim()}`);

@@ -132,7 +132,7 @@
 <ContextMenu.Root>
 	<ContextMenu.Trigger>
 		{#snippet child({ props })}
-			<div class="relative">
+			<div class="relative shrink-0">
 				{#if dropTarget}
 					<div
 						class="pointer-events-none absolute inset-x-1 -top-px z-10 h-0.5 rounded-full bg-signal"

@@ -4,6 +4,10 @@
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import { editView } from '#lib/view-actions.js';
+	import { catalog } from '#lib/state/catalog.js';
+	import type { RelationKind } from '#lib/api.js';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -30,6 +34,23 @@
 	const columnTypes = $derived(Object.fromEntries(tab.columns.map((c) => [c.name, c.dataType])));
 	const primaryKeys = $derived(tab.columns.filter((c) => c.primaryKey).map((c) => c.name));
 	let testDataOpen = $state(false);
+	let relationKind = $state<RelationKind | null>(null);
+	$effect(() => {
+		const { connectionId, database, schema, table } = tab;
+		let current = true;
+		relationKind = null;
+		catalog.relations(connectionId, database, schema).then(
+			(relations) => {
+				if (current) relationKind = relations.find((r) => r.name === table)?.kind ?? null;
+			},
+			() => {
+				if (current) relationKind = null;
+			}
+		);
+		return () => {
+			current = false;
+		};
+	});
 	// svelte-ignore state_referenced_locally
 	let filterColumn = $state(tab.filter?.column ?? '');
 	// svelte-ignore state_referenced_locally
@@ -78,6 +99,16 @@
 					: ''}</Button
 			>
 		{/each}
+		{#if relationKind === 'view'}
+			<Button
+				size="sm"
+				variant="outline"
+				class="ml-auto"
+				disabled={connection?.readOnly ?? true}
+				onclick={() => editView(tab.connectionId, tab.database, tab.schema, tab.table)}
+				><PencilIcon /> Edit view</Button
+			>
+		{/if}
 	</div>
 	<div
 		class="min-h-0 flex-1 flex-col"

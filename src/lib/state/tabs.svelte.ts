@@ -44,6 +44,10 @@ export class QueryTab extends TabBase {
 	ranFrom = $state(0);
 	builderOpen = $state(false);
 	viewSchema = $state('');
+	creatingView = $state(false);
+	viewNotice = $state('');
+	viewSqlSnapshot = $state<string | null>(null);
+	viewSqlPrefix = $state<string | null>(null);
 	editingView = $state<{
 		database: string;
 		schema: string;

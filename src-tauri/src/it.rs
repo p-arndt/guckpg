@@ -947,3 +947,37 @@ async fn creates_and_updates_visual_builder_views() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn boolean_view_filter_remains_equivalent_after_visual_import() {
+    let Some(conn) = direct().await else { return };
+    conn.run(
+        "CREATE SCHEMA it_boolean_view;
+         CREATE TABLE it_boolean_view.customers (id integer, active boolean);
+         INSERT INTO it_boolean_view.customers VALUES (1, true), (2, false), (3, null);
+         CREATE VIEW it_boolean_view.active_customers AS SELECT id FROM it_boolean_view.customers WHERE active;",
+        10,
+    )
+    .await
+    .unwrap();
+    let view = catalog::view_details(&conn.client, "it_boolean_view", "active_customers")
+        .await
+        .unwrap();
+    let view = serde_json::to_value(view).unwrap();
+    assert!(view["query"].as_str().unwrap().contains("WHERE active"));
+    conn.run(
+        "CREATE OR REPLACE VIEW it_boolean_view.active_customers AS
+         SELECT customers.id FROM it_boolean_view.customers WHERE customers.active IS TRUE;",
+        10,
+    )
+    .await
+    .unwrap();
+    let rows = conn
+        .run("SELECT id FROM it_boolean_view.active_customers", 10)
+        .await
+        .unwrap();
+    assert_eq!(rows.results[0].rows, vec![vec![Some("1".into())]]);
+    conn.run("DROP SCHEMA it_boolean_view CASCADE", 10)
+        .await
+        .unwrap();
+}

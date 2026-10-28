@@ -22,12 +22,16 @@ export const OPERATORS = [
 	'IN',
 	'NOT IN',
 	'IS NULL',
-	'IS NOT NULL'
+	'IS NOT NULL',
+	'IS TRUE',
+	'IS FALSE',
+	'IS NOT TRUE',
+	'IS NOT FALSE'
 ] as const;
 export type Operator = (typeof OPERATORS)[number];
 
 export function takesValue(operator: Operator): boolean {
-	return operator !== 'IS NULL' && operator !== 'IS NOT NULL';
+	return !operator.startsWith('IS ');
 }
 
 export interface ColumnRef {

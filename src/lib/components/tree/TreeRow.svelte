@@ -36,20 +36,22 @@
 	aria-expanded={expanded}
 	aria-busy={loading || undefined}
 	class={cn(
-		'group flex h-7 w-full items-center gap-1.5 rounded-lg pr-2 text-left text-[13px] text-ink-2 transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground data-[state=open]:bg-hover data-[state=open]:text-foreground',
+		'group flex h-[26px] w-full shrink-0 items-center gap-1.5 rounded-lg pr-2 text-left text-[13px] text-ink-2 transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground data-[state=open]:bg-hover data-[state=open]:text-foreground',
 		className
 	)}
-	style:padding-left="{depth * 14 + 4}px"
+	style:padding-left="{depth * 10 + (expanded !== undefined || loading ? 4 : 22)}px"
 >
-	<span class="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
-		{#if loading}
-			<LoaderIcon class="size-3.5 animate-spin" />
-		{:else if expanded !== undefined}
-			<ChevronRightIcon
-				class="size-3.5 transition-transform duration-(--dur-micro) {expanded ? 'rotate-90' : ''}"
-			/>
-		{/if}
-	</span>
+	{#if expanded !== undefined || loading}
+		<span class="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+			{#if loading}
+				<LoaderIcon class="size-3.5 animate-spin" />
+			{:else if expanded !== undefined}
+				<ChevronRightIcon
+					class="size-3.5 transition-transform duration-(--dur-micro) {expanded ? 'rotate-90' : ''}"
+				/>
+			{/if}
+		</span>
+	{/if}
 	{#if icon}<span class="flex shrink-0 items-center text-muted-foreground">{@render icon()}</span
 		>{/if}
 	<span class="min-w-0 flex-1 truncate">{label}</span>

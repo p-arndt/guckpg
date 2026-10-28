@@ -194,13 +194,19 @@
 	onkeydown={onTreeKeydown}
 >
 	{#if connected.length}
-		<p role="presentation" class="px-1.5 pt-1 pb-1 text-xs font-medium text-muted-foreground">
+		<p
+			role="presentation"
+			class="shrink-0 px-1.5 pt-1 pb-1 text-xs font-medium text-muted-foreground"
+		>
 			Connected
 		</p>
 		{#each connected as connection (connection.id)}
 			{@render connectionNode(connection, 0, true)}
 		{/each}
-		<p role="presentation" class="px-1.5 pt-3 pb-1 text-xs font-medium text-muted-foreground">
+		<p
+			role="presentation"
+			class="shrink-0 px-1.5 pt-2 pb-1 text-xs font-medium text-muted-foreground"
+		>
 			Connections
 		</p>
 	{/if}

@@ -27,3 +27,18 @@ export function replaceViewSql(
 	const options = details.options ? ` WITH (${details.options})` : '';
 	return `CREATE OR REPLACE VIEW ${quoteIdent(schema)}.${quoteIdent(name)}${options} AS\n${select};`;
 }
+
+export function viewEditorContent(
+	current: string,
+	snapshot: string | null,
+	previousPrefix: string | null,
+	statement: string
+) {
+	const prefix =
+		previousPrefix !== null && current === snapshot
+			? previousPrefix
+			: current.trim()
+				? `${current.trimEnd()}\n\n`
+				: '';
+	return { prefix, sql: `${prefix}${statement}\n` };
+}

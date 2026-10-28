@@ -113,7 +113,7 @@
 	{#if error}
 		<p
 			class="py-1 pr-2 text-xs break-words text-destructive"
-			style:padding-left="{(depth + 1) * 14 + 26}px"
+			style:padding-left="{(depth + 1) * 10 + 22}px"
 			role="alert"
 		>
 			{error}
@@ -121,7 +121,7 @@
 	{:else if !roles.loading && roles.data?.length === 0}
 		<p
 			class="py-1 text-[13px] text-muted-foreground"
-			style:padding-left="{(depth + 1) * 14 + 26}px"
+			style:padding-left="{(depth + 1) * 10 + 22}px"
 		>
 			No roles
 		</p>
@@ -130,7 +130,7 @@
 		{#if groups.length > 1}
 			<p
 				class="pt-1.5 pb-0.5 text-[11px] text-muted-foreground"
-				style:padding-left="{(depth + 1) * 14 + 26}px"
+				style:padding-left="{(depth + 1) * 10 + 22}px"
 			>
 				{group.label}
 			</p>

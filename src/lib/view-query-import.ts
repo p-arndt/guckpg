@@ -240,6 +240,7 @@ function parse(
 			}
 			return items;
 		}
+		const negated = !parsingHaving && take('NOT');
 		const parsed = parsingHaving
 			? expression()
 			: { ref: ref(), aggregate: null, aggregateDistinct: false };
@@ -247,9 +248,11 @@ function parse(
 		const column = parsed.ref;
 		let operator: Operator;
 		if (take('IS')) {
+			if (negated) throw new Error('Unsupported negation');
 			const not = take('NOT');
-			expect('NULL');
-			operator = not ? 'IS NOT NULL' : 'IS NULL';
+			const target = take('NULL') ? 'NULL' : take('TRUE') ? 'TRUE' : take('FALSE') ? 'FALSE' : null;
+			if (!target) throw new Error('Unsupported IS expression');
+			operator = `IS ${not ? 'NOT ' : ''}${target}` as Operator;
 			return [
 				{
 					ref: column,
@@ -260,6 +263,17 @@ function parse(
 				}
 			];
 		}
+		if (
+			!parsingHaving &&
+			(!tokens[at] ||
+				[')', ';', 'AND', 'OR', 'GROUP', 'ORDER', 'LIMIT', 'OFFSET'].includes(
+					tokens[at].toUpperCase()
+				))
+		) {
+			return [{ ref: column, operator: negated ? 'IS FALSE' : 'IS TRUE', value: '' }];
+		}
+		if (negated) throw new Error('Unsupported negation');
+
 		const next = tokens[at++];
 		if (!['=', '<>', '<', '<=', '>', '>=', 'LIKE', 'ILIKE'].includes(next?.toUpperCase()))
 			throw new Error('Unsupported operator');

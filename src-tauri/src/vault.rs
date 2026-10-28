@@ -11,6 +11,10 @@ trait Backend {
     fn read(&self, account: &str) -> AppResult<Option<String>>;
     fn write(&self, account: &str, value: &str) -> AppResult<()>;
     fn delete(&self, account: &str) -> AppResult<()>;
+    /// Max UTF-16 units one item can hold; longer values are split across items.
+    fn max_len(&self) -> usize {
+        usize::MAX
+    }
 }
 
 struct Keychain;
@@ -35,6 +39,60 @@ impl Backend for Keychain {
             Err(error) => Err(error.into()),
         }
     }
+
+    // Windows caps a credential blob at 2560 bytes (1280 UTF-16 units); keep a margin.
+    // Elsewhere one item stays one item, so macOS keeps asking for access only once.
+    fn max_len(&self) -> usize {
+        if cfg!(windows) { 1000 } else { usize::MAX }
+    }
+}
+
+fn part_name(index: usize) -> String {
+    format!("{VAULT}#{index}")
+}
+
+fn split(value: &str, max: usize) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut start, mut units) = (0, 0);
+    for (i, c) in value.char_indices() {
+        if units + c.len_utf16() > max {
+            parts.push(&value[start..i]);
+            (start, units) = (i, 0);
+        }
+        units += c.len_utf16();
+    }
+    parts.push(&value[start..]);
+    parts
+}
+
+fn read_vault(backend: &impl Backend) -> AppResult<Option<String>> {
+    let Some(mut value) = backend.read(VAULT)? else {
+        return Ok(None);
+    };
+    for index in 1.. {
+        match backend.read(&part_name(index))? {
+            Some(part) => value.push_str(&part),
+            None => break,
+        }
+    }
+    Ok(Some(value))
+}
+
+// ponytail: not atomic across items; a crash mid-write on Windows can leave a mixed blob.
+fn write_vault(backend: &impl Backend, value: &str) -> AppResult<()> {
+    let parts = split(value, backend.max_len());
+    for (index, part) in parts.iter().enumerate().skip(1) {
+        backend.write(&part_name(index), part)?;
+    }
+    backend.write(VAULT, parts[0])?;
+    for index in parts.len().. {
+        let name = part_name(index);
+        if backend.read(&name)?.is_none() {
+            break;
+        }
+        backend.delete(&name)?;
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -52,7 +110,7 @@ impl Vault {
         backend: &impl Backend,
     ) -> AppResult<&mut HashMap<String, Option<String>>> {
         if self.values.is_none() {
-            self.values = Some(match backend.read(VAULT)? {
+            self.values = Some(match read_vault(backend)? {
                 Some(value) => serde_json::from_str(&value)?,
                 None => HashMap::new(),
             });
@@ -66,18 +124,18 @@ impl Vault {
         account: &str,
         value: Option<String>,
     ) -> AppResult<()> {
-        if account == VAULT {
+        if account.starts_with(VAULT) {
             return Err(AppError::msg("Invalid credential account."));
         }
         let mut updated = self.values(backend)?.clone();
         updated.insert(account.to_owned(), value);
-        backend.write(VAULT, &serde_json::to_string(&updated)?)?;
+        write_vault(backend, &serde_json::to_string(&updated)?)?;
         self.values = Some(updated);
         Ok(())
     }
 
     fn get(&mut self, backend: &impl Backend, account: &str) -> AppResult<Option<String>> {
-        if account == VAULT {
+        if account.starts_with(VAULT) {
             return Err(AppError::msg("Invalid credential account."));
         }
         if let Some(value) = self.values(backend)?.get(account) {
@@ -127,7 +185,7 @@ pub fn get(account: &str) -> AppResult<Option<String>> {
     let mut vault = CACHE
         .lock()
         .map_err(|_| AppError::msg("Credential store unavailable."))?;
-    if account == VAULT {
+    if account.starts_with(VAULT) {
         return Err(AppError::msg("Invalid credential account."));
     }
     if let Some(Some(value)) = vault.values.as_ref().and_then(|values| values.get(account)) {
@@ -170,6 +228,7 @@ mod tests {
         entries: RefCell<HashMap<String, String>>,
         reads: RefCell<Vec<String>>,
         fail_write: Cell<bool>,
+        max_len: Cell<Option<usize>>,
     }
 
     impl Backend for Memory {
@@ -190,6 +249,44 @@ mod tests {
             self.entries.borrow_mut().remove(account);
             Ok(())
         }
+        fn max_len(&self) -> usize {
+            self.max_len.get().unwrap_or(usize::MAX)
+        }
+    }
+
+    #[test]
+    fn splits_large_vault_across_items_and_drops_stale_parts() {
+        let backend = Memory::default();
+        backend.max_len.set(Some(16));
+        let mut vault = Vault::default();
+        for i in 0..20 {
+            vault
+                .set(
+                    &backend,
+                    &format!("conn-{i}"),
+                    Some(format!("pässwörd-{i}")),
+                )
+                .unwrap();
+        }
+        assert!(backend.entries.borrow().len() > 1);
+        assert!(
+            backend
+                .entries
+                .borrow()
+                .values()
+                .all(|v| v.encode_utf16().count() <= 16)
+        );
+        let mut reopened = Vault::default();
+        assert_eq!(
+            reopened.get(&backend, "conn-19").unwrap().as_deref(),
+            Some("pässwörd-19")
+        );
+        for i in 0..20 {
+            reopened.remove(&backend, &format!("conn-{i}")).unwrap();
+        }
+        let full = read_vault(&backend).unwrap().unwrap();
+        assert_eq!(backend.entries.borrow().len(), split(&full, 16).len());
+        assert!(Vault::default().get(&backend, &part_name(1)).is_err());
     }
 
     #[test]
@@ -223,7 +320,7 @@ mod tests {
             reopened.get(&backend, "ai").unwrap().as_deref(),
             Some("ai-secret")
         );
-        assert_eq!(&*backend.reads.borrow(), &[VAULT]);
+        assert_eq!(&*backend.reads.borrow(), &[VAULT.to_string(), part_name(1)]);
         reopened.remove(&backend, "db").unwrap();
         backend
             .entries

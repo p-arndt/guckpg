@@ -338,6 +338,57 @@ pub async fn relation_definition(client: &Client, schema: &str, name: &str) -> A
     definition_of(client, schema, kind, row.get(0)).await
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewDetails {
+    query: String,
+    options: String,
+    sources: Vec<ViewSource>,
+    search_path: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ViewSource {
+    schema: String,
+    name: String,
+}
+
+pub async fn view_details(client: &Client, schema: &str, name: &str) -> AppResult<ViewDetails> {
+    let row = client
+        .query_typed_opt(
+            "SELECT pg_catalog.pg_get_viewdef(c.oid, false),
+                pg_catalog.current_schemas(true)::text[],
+                COALESCE((SELECT pg_catalog.string_agg(
+                    pg_catalog.format('%I = %L', option_name, option_value), ', ')
+                    FROM pg_catalog.pg_options_to_table(c.reloptions)), '')
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'v'",
+            &[(&schema, Type::NAME), (&name, Type::NAME)],
+        )
+        .await?
+        .ok_or_else(|| AppError::msg("view does not exist in this schema"))?;
+    let sources = client.query_typed(
+        "SELECT DISTINCT source_ns.nspname::text, source.relname::text
+         FROM pg_catalog.pg_class view_rel
+         JOIN pg_catalog.pg_namespace view_ns ON view_ns.oid = view_rel.relnamespace
+         JOIN pg_catalog.pg_rewrite rule ON rule.ev_class = view_rel.oid
+         JOIN pg_catalog.pg_depend dep ON dep.classid = 'pg_catalog.pg_rewrite'::pg_catalog.regclass AND dep.objid = rule.oid
+         JOIN pg_catalog.pg_class source ON dep.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass AND source.oid = dep.refobjid
+         JOIN pg_catalog.pg_namespace source_ns ON source_ns.oid = source.relnamespace
+         WHERE view_ns.nspname = $1 AND view_rel.relname = $2 AND view_rel.relkind = 'v'
+           AND source.oid <> view_rel.oid AND source.relkind IN ('r', 'p', 'v', 'm', 'f')
+         ORDER BY 1, 2",
+        &[(&schema, Type::NAME), (&name, Type::NAME)],
+    ).await?.iter().map(|r| ViewSource { schema: r.get(0), name: r.get(1) }).collect();
+    Ok(ViewDetails {
+        query: row.get(0),
+        options: row.get(2),
+        sources,
+        search_path: row.get(1),
+    })
+}
+
 pub async fn refresh_materialized_view(client: &Client, schema: &str, name: &str) -> AppResult<()> {
     let exists: bool = client
         .query_typed_one(

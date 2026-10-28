@@ -19,6 +19,7 @@
 	import QueryBuilder from './builder/QueryBuilder.svelte';
 	import ResultsPanel from './ResultsPanel.svelte';
 	import ExplainPlan from './ExplainPlan.svelte';
+	import SaveViewDialog from './SaveViewDialog.svelte';
 
 	interface Props {
 		tab: QueryTab;
@@ -26,6 +27,7 @@
 
 	let { tab }: Props = $props();
 
+	let saveViewOpen = $state(false);
 	let editor = $state<SqlEditor | null>(null);
 	let databases = $state<string[]>([]);
 	let completion = $state<CompletionTable[]>([]);
@@ -57,6 +59,7 @@
 	});
 
 	const connection = $derived(connections.get(tab.connectionId));
+	const editingView = $derived(tab.editingView?.database === tab.database ? tab.editingView : null);
 
 	const rowLimitLabel = (n: string) => Number(n).toLocaleString('en-US');
 	const quietTrigger =
@@ -259,6 +262,9 @@
 					running={tab.running}
 					onrun={runBuilt}
 					onopen={openInEditor}
+					onsave={() => (saveViewOpen = true)}
+					readOnly={connection?.readOnly ?? true}
+					editingView={!!editingView}
 				/>
 			{/if}
 		</Resizable.Pane>
@@ -286,3 +292,16 @@
 		</Resizable.Pane>
 	</Resizable.PaneGroup>
 </div>
+
+{#if builder && saveViewOpen}
+	{@const built = buildSql(builder)}
+	<SaveViewDialog
+		bind:open={saveViewOpen}
+		connectionId={tab.connectionId}
+		database={tab.database}
+		query={built.sql}
+		problems={built.problems}
+		defaultSchema={tab.viewSchema}
+		{editingView}
+	/>
+{/if}

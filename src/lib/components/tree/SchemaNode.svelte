@@ -4,6 +4,7 @@
 	import { toast } from 'svelte-sonner';
 	import { api, errorMessage, type Relation, type SchemaObject } from '#lib/api.js';
 	import { groupSchemaObjects, groupRelations } from '#lib/objects.js';
+	import { importViewQuery } from '#lib/view-builder.js';
 	import { Resource } from '#lib/resource.svelte.js';
 	import { ident, qualified } from '#lib/sql-quote.js';
 	import { catalog } from '#lib/state/catalog.js';
@@ -70,6 +71,30 @@
 		}
 	}
 
+	async function editView(rel: Relation) {
+		try {
+			const [details, tables] = await Promise.all([
+				api.viewDetails(connectionId, database, schema, rel.name),
+				catalog.completionTables(connectionId, database)
+			]);
+			const model = importViewQuery(details.query, tables, details.sources, details.searchPath);
+			if (!model) {
+				toast.info(
+					'This view cannot be represented in the visual builder. Opening its SQL definition.'
+				);
+				await openDefinition(rel);
+				return;
+			}
+			const tab = tabs.openQuery(connectionId, database);
+			tab.title = `View: ${rel.name}`;
+			tab.builder = { database, model };
+			tab.builderOpen = true;
+			tab.editingView = { database, schema, name: rel.name, details };
+		} catch (e) {
+			toast.error(errorMessage(e));
+		}
+	}
+
 	async function refreshMaterializedView(name: string) {
 		if (readOnly || refreshing !== null) return;
 		refreshing = name;
@@ -107,6 +132,14 @@
 		{/snippet}
 	</ContextMenu.Trigger>
 	<ContextMenu.Content class="w-48">
+		<ContextMenu.Item
+			disabled={readOnly}
+			onSelect={() => {
+				const tab = tabs.openQuery(connectionId, database);
+				tab.viewSchema = schema;
+				tab.builderOpen = true;
+			}}>New view…</ContextMenu.Item
+		>
 		<ContextMenu.Item disabled={readOnly} onSelect={() => (creatingTable = true)}
 			>New table…</ContextMenu.Item
 		>
@@ -191,6 +224,11 @@
 					>
 						Open data
 					</ContextMenu.Item>
+					{#if rel.kind === 'view'}
+						<ContextMenu.Item disabled={readOnly} onSelect={() => editView(rel)}
+							>Edit visually</ContextMenu.Item
+						>
+					{/if}
 					{#if rel.kind === 'view' || rel.kind === 'materialized'}
 						<ContextMenu.Item onSelect={() => openDefinition(rel)}>Open definition</ContextMenu.Item
 						>

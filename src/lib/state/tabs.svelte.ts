@@ -1,4 +1,11 @@
-import { api, toAppError, type AppError, type Column, type QueryOutput } from '#lib/api.js';
+import {
+	api,
+	toAppError,
+	type AppError,
+	type Column,
+	type QueryOutput,
+	type ViewDetails
+} from '#lib/api.js';
 import { cycleSort, type Sort } from '#lib/grid.js';
 import { confirmDiscard } from './confirm.svelte.js';
 import { connections } from './connections.svelte.js';
@@ -36,6 +43,13 @@ export class QueryTab extends TabBase {
 	/** Offset in `sql` where the last executed text started, to map error positions. */
 	ranFrom = $state(0);
 	builderOpen = $state(false);
+	viewSchema = $state('');
+	editingView = $state<{
+		database: string;
+		schema: string;
+		name: string;
+		details: ViewDetails;
+	} | null>(null);
 	/** Kept while the tab lives so closing the builder does not lose the canvas. */
 	builder = $state<{ database: string; model: BuilderModel } | null>(null);
 	maxRows = $state(1000);

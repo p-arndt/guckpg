@@ -42,6 +42,16 @@
 		...AGGREGATES.map((a) => ({ value: a, label: a }))
 	];
 	const operatorOptions = OPERATORS.map((op) => ({ value: op, label: op }));
+	const havingColumns = $derived([
+		...columns,
+		...(model.tables.length ? [{ value: `${model.tables[0].id}.*`, label: '*' }] : [])
+	]);
+	const sortOptions = $derived([
+		...columns,
+		...model.columns
+			.filter((c) => c.countAll)
+			.map((c) => ({ value: `${c.tableId}.*`, label: 'COUNT(*)' }))
+	]);
 
 	function move<T>(list: T[], index: number, by: number) {
 		const target = index + by;
@@ -82,16 +92,30 @@
 	{/if}
 	{#each model.columns as column, i (refKey(column))}
 		<div class="group flex flex-wrap items-center gap-x-1 px-2">
-			<span class="min-w-36 flex-1 py-1.5 pl-1 text-xs">{@render ref(column)}</span>
+			<span class="min-w-36 flex-1 py-1.5 pl-1 text-xs"
+				>{#if column.countAll}*{:else}{@render ref(column)}{/if}</span
+			>
 			<div class="ml-auto flex items-center gap-1">
 				<Pick
 					label="Aggregate"
 					class="w-20"
 					value={column.aggregate ?? 'none'}
-					options={aggregateOptions}
+					options={column.countAll ? [{ value: 'COUNT', label: 'COUNT' }] : aggregateOptions}
 					onchange={(v) =>
 						(column.aggregate = v === 'none' ? null : (v as typeof column.aggregate))}
 				/>
+				{#if column.aggregate && !column.countAll}
+					<label
+						class="flex items-center gap-1 text-xs text-muted-foreground"
+						title="Aggregate distinct values"
+					>
+						<Checkbox
+							checked={column.aggregateDistinct ?? false}
+							onCheckedChange={(value) => (column.aggregateDistinct = value)}
+							aria-label="Distinct aggregate values"
+						/> distinct
+					</label>
+				{/if}
 				<input
 					class="{field} measured w-24"
 					placeholder="alias"
@@ -118,6 +142,23 @@
 			</div>
 		</div>
 	{/each}
+
+	<div class="px-2">
+		<button
+			type="button"
+			class={addButton}
+			disabled={!model.tables.length || model.columns.some((column) => column.countAll)}
+			onclick={() =>
+				model.columns.push({
+					tableId: model.tables[0].id,
+					column: '*',
+					aggregate: 'COUNT',
+					alias: '',
+					countAll: true,
+					builtinAggregate: true
+				})}><PlusIcon class="size-3.5" /> Count rows</button
+		>
+	</div>
 
 	{#if model.tables.length > 1}
 		{@render heading('Joins', 'JOIN')}
@@ -157,6 +198,7 @@
 	{/if}
 
 	{@render heading('Conditions', 'WHERE')}
+	<p class="px-3 pb-1 text-xs text-muted-foreground">Use parentheses to group conditions.</p>
 	{#each model.filters as filter, i (filter.id)}
 		<div class="flex flex-wrap items-center gap-x-1 px-2">
 			<div class="flex min-w-44 flex-1 items-center gap-1">
@@ -171,6 +213,21 @@
 						>{filter.connector.toLowerCase()}</button
 					>
 				{/if}
+				<label
+					class="flex items-center gap-0.5 text-xs text-muted-foreground"
+					title="Opening parentheses"
+				>
+					(
+					<input
+						type="number"
+						min="0"
+						max="20"
+						class="w-9 rounded border border-input bg-background px-1 text-xs"
+						aria-label="Opening parentheses"
+						value={filter.openGroups ?? 0}
+						oninput={(event) => (filter.openGroups = Number(event.currentTarget.value))}
+					/>
+				</label>
 				<Pick
 					label="Condition column"
 					class="min-w-0 flex-1"
@@ -196,6 +253,21 @@
 						bind:value={filter.value}
 					/>
 				{/if}
+				<label
+					class="flex items-center gap-0.5 text-xs text-muted-foreground"
+					title="Closing parentheses"
+				>
+					<input
+						type="number"
+						min="0"
+						max="20"
+						class="w-9 rounded border border-input bg-background px-1 text-xs"
+						aria-label="Closing parentheses"
+						value={filter.closeGroups ?? 0}
+						oninput={(event) => (filter.closeGroups = Number(event.currentTarget.value))}
+					/>
+					)
+				</label>
 				<button
 					type="button"
 					class={iconButton}
@@ -223,6 +295,124 @@
 		>
 	</div>
 
+	{@render heading('Aggregate conditions', 'HAVING')}
+	{#each model.having ?? [] as filter, i (filter.id)}
+		<div class="flex flex-wrap items-center gap-x-1 px-2">
+			<div class="flex min-w-44 flex-1 items-center gap-1">
+				{#if i === 0}<span class="measured w-11 shrink-0 pl-1 text-[11px] text-muted-foreground"
+						>having</span
+					>
+				{:else}<button
+						type="button"
+						class="measured h-6 w-11 shrink-0 text-[11px] text-cool"
+						title="Switch between AND and OR"
+						onclick={() => (filter.connector = filter.connector === 'AND' ? 'OR' : 'AND')}
+						>{filter.connector.toLowerCase()}</button
+					>{/if}
+				<label
+					class="flex items-center gap-0.5 text-xs text-muted-foreground"
+					title="Opening parentheses"
+					>(
+					<input
+						type="number"
+						min="0"
+						max="20"
+						class="w-9 rounded border border-input bg-background px-1 text-xs"
+						aria-label="Opening HAVING parentheses"
+						value={filter.openGroups ?? 0}
+						oninput={(event) => (filter.openGroups = Number(event.currentTarget.value))}
+					/>
+				</label>
+				<Pick
+					label="HAVING aggregate"
+					class="w-20"
+					value={filter.havingAggregate ?? 'COUNT'}
+					options={(filter.havingCountAll ? ['COUNT'] : AGGREGATES).map((a) => ({
+						value: a,
+						label: a
+					}))}
+					onchange={(v) => (filter.havingAggregate = v as typeof filter.havingAggregate)}
+				/>
+				<Pick
+					label="HAVING column"
+					class="min-w-0 flex-1"
+					placeholder="column"
+					value={refKey(filter.column)}
+					options={havingColumns}
+					onchange={(v) => {
+						filter.column = parseRef(v);
+						filter.havingCountAll = filter.column.column === '*';
+						if (filter.havingCountAll) {
+							filter.havingAggregate = 'COUNT';
+							filter.havingDistinct = false;
+						}
+					}}
+				/>
+			</div>
+			<div class="flex min-w-44 flex-1 items-center gap-1">
+				{#if !filter.havingCountAll}<label
+						class="flex items-center gap-1 text-xs text-muted-foreground"
+						><Checkbox
+							checked={filter.havingDistinct ?? false}
+							onCheckedChange={(value) => (filter.havingDistinct = value)}
+							aria-label="Distinct HAVING values"
+						/> distinct</label
+					>{/if}
+				<Pick
+					label="HAVING operator"
+					class="w-24"
+					value={filter.operator}
+					options={operatorOptions}
+					onchange={(v) => (filter.operator = v as Operator)}
+				/>
+				{#if takesValue(filter.operator)}<input
+						class="{field} measured min-w-0 flex-1"
+						placeholder="value"
+						aria-label="HAVING value"
+						bind:value={filter.value}
+					/>{/if}
+				<label
+					class="flex items-center gap-0.5 text-xs text-muted-foreground"
+					title="Closing parentheses"
+					><input
+						type="number"
+						min="0"
+						max="20"
+						class="w-9 rounded border border-input bg-background px-1 text-xs"
+						aria-label="Closing HAVING parentheses"
+						value={filter.closeGroups ?? 0}
+						oninput={(event) => (filter.closeGroups = Number(event.currentTarget.value))}
+					/> )</label
+				>
+				<button
+					type="button"
+					class={iconButton}
+					aria-label="Remove HAVING condition"
+					onclick={() => model.having?.splice(i, 1)}><XIcon class="size-3.5" /></button
+				>
+			</div>
+		</div>
+	{/each}
+	<div class="px-2">
+		<button
+			type="button"
+			class={addButton}
+			disabled={!model.tables.length}
+			onclick={() => {
+				model.having ??= [];
+				model.having.push({
+					id: newId('h'),
+					connector: 'AND',
+					column: null,
+					operator: '>',
+					value: '',
+					havingAggregate: 'COUNT',
+					havingBuiltin: true
+				});
+			}}><PlusIcon class="size-3.5" /> Aggregate condition</button
+		>
+	</div>
+
 	{@render heading('Sort', 'ORDER BY')}
 	{#each model.sorts as sort, i (sort.id)}
 		<div class="flex items-center gap-1 px-2">
@@ -231,7 +421,7 @@
 				class="min-w-0 flex-1"
 				placeholder="column"
 				value={refKey(sort.column)}
-				options={columns}
+				options={sortOptions}
 				onchange={(v) => (sort.column = parseRef(v))}
 			/>
 			<button

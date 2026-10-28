@@ -34,6 +34,9 @@ Browse schemas, write queries, edit data and explore relationships — all from 
 | **ER diagrams**           | Explore table relationships and foreign keys visually.                                        |
 | **AI assistant**          | Connect Ollama, OpenAI or an OpenAI-compatible endpoint and choose its database access level. |
 
+The query builder can save a visual query as a PostgreSQL view after reviewing the SQL. Supported existing views can also be opened in the builder, including common joins, filters, aggregates and HAVING conditions; unsupported SQL opens in the
+editor.
+
 ## Install
 
 Download for **macOS** (Apple Silicon / Intel) or **Windows** from [GitHub Releases](https://github.com/p-arndt/guckpg/releases).

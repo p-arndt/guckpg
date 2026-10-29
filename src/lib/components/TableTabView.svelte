@@ -12,12 +12,18 @@
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import XIcon from '@lucide/svelte/icons/x';
+	import ListFilterIcon from '@lucide/svelte/icons/list-filter';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
 	import { errorMessage } from '#lib/api.js';
 	import { formatCount, formatDuration } from '#lib/format.js';
-	import { FILTER_OPERATORS, takesValue, type FilterCondition } from '#lib/table-filter.js';
+	import {
+		FILTER_OPERATORS,
+		isComplete,
+		takesValue,
+		type FilterCondition
+	} from '#lib/table-filter.js';
 	import { tabs, type TableTab } from '#lib/state/tabs.svelte.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { confirmDiscard } from '#lib/state/confirm.svelte.js';
@@ -40,6 +46,17 @@
 	const filterColumns = $derived(
 		tab.columns.length ? tab.columns.map((c) => c.name) : (result?.columns ?? [])
 	);
+	function pageValues(column: string): string[] {
+		const index = result?.columns.indexOf(column) ?? -1;
+		if (index < 0 || !result) return [];
+		return [
+			...new Set(
+				result.rows
+					.map((row) => row[index])
+					.filter((value): value is string => value !== null && value !== '')
+			)
+		].slice(0, 100);
+	}
 	let relationKind = $state<RelationKind | null>(null);
 	$effect(() => {
 		const { connectionId, database, schema, table } = tab;
@@ -72,6 +89,8 @@
 			? tab.filters.map((f) => ({ ...f, id: crypto.randomUUID() }))
 			: [blankDraft()]
 	);
+	let filterOpen = $state(false);
+	let filterError = $state(false);
 	let testDataOpen = $state(false);
 	let designerOpened = $state(false);
 	$effect(() => {
@@ -85,19 +104,40 @@
 		if (await confirmDiscard(tab.dirty)) action();
 	}
 
+	function toggleFilter() {
+		if (!filterOpen) {
+			drafts = tab.filters.length
+				? tab.filters.map((filter) => ({ ...filter, id: crypto.randomUUID() }))
+				: [blankDraft()];
+			filterError = false;
+		}
+		filterOpen = !filterOpen;
+	}
+
 	function applyFilter() {
+		if (drafts.some((draft) => !isComplete(draft))) {
+			filterError = true;
+			return;
+		}
+		filterError = false;
 		const filters = drafts.map(({ column, op, value, connector }) => ({
 			column,
 			op,
 			value,
 			connector
 		}));
-		void guarded(() => void tab.applyFilter(filters));
+		void guarded(() => {
+			void tab.applyFilter(filters);
+			filterOpen = false;
+		});
 	}
 
 	function clearFilter() {
-		drafts = [blankDraft()];
-		void guarded(() => void tab.applyFilter([]));
+		void guarded(() => {
+			drafts = [blankDraft()];
+			filterError = false;
+			void tab.applyFilter([]);
+		});
 	}
 
 	const load = () => tab.load();
@@ -139,7 +179,7 @@
 		{/if}
 	</div>
 	<div
-		class="min-h-0 flex-1 flex-col"
+		class="relative min-h-0 flex-1 flex-col"
 		class:flex={tab.view === 'data'}
 		class:hidden={tab.view !== 'data'}
 	>
@@ -200,6 +240,16 @@
 
 			<Button
 				size="sm"
+				variant={filterOpen || tab.filters.length ? 'secondary' : 'ghost'}
+				aria-expanded={filterOpen}
+				aria-controls="table-filters-{tab.id}"
+				onclick={toggleFilter}
+			>
+				<ListFilterIcon /> Filter{tab.filters.length ? ` (${tab.filters.length})` : ''}
+			</Button>
+
+			<Button
+				size="sm"
 				variant="outline"
 				disabled={tab.running || tab.dirty > 0 || (connection?.readOnly ?? true)}
 				onclick={() => (testDataOpen = true)}>Generate test data</Button
@@ -225,89 +275,153 @@
 			</Button>
 		</div>
 
-		<form
-			class="flex shrink-0 flex-col gap-1 border-b px-3 py-1.5"
-			onsubmit={(event) => {
-				event.preventDefault();
-				applyFilter();
-			}}
-		>
-			{#each drafts as draft, i (draft.id)}
-				<div class="flex items-center gap-2">
-					<span class="w-10 shrink-0 text-xs text-muted-foreground">{i === 0 ? 'Where' : ''}</span>
-					{#if i > 0}
-						<button
-							type="button"
-							class="measured h-7 w-12 shrink-0 rounded-md border text-[11px] text-cool hover:bg-hover disabled:opacity-50"
-							title="Switch between AND and OR"
-							disabled={tab.running}
-							onclick={() => (draft.connector = draft.connector === 'AND' ? 'OR' : 'AND')}
-							>{draft.connector.toLowerCase()}</button
+		{#if filterOpen}
+			<form
+				id="table-filters-{tab.id}"
+				aria-label="Filter rows"
+				class="shrink-0 border-b bg-muted/30 px-3 py-2"
+				onsubmit={(event) => {
+					event.preventDefault();
+					applyFilter();
+				}}
+			>
+				<div class="flex max-h-[min(9rem,35vh)] max-w-2xl flex-col gap-1.5 overflow-auto">
+					{#each drafts as draft, i (draft.id)}
+						<div
+							class="grid grid-cols-[4rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2rem] items-center gap-1.5"
 						>
-					{/if}
-					<select
-						class="h-8 max-w-44 rounded-md border bg-background px-2 text-sm"
-						aria-label="Filter column"
-						bind:value={draft.column}
-						disabled={tab.running}
-					>
-						<option value="">Choose column</option>
-						{#each filterColumns as name (name)}<option value={name}>{name}</option>{/each}
-					</select>
-					<select
-						class="h-8 rounded-md border bg-background px-2 text-sm"
-						aria-label="Filter operator"
-						bind:value={draft.op}
-						disabled={tab.running}
-					>
-						{#each FILTER_OPERATORS as operator (operator.value)}
-							<option value={operator.value}>{operator.label}</option>
-						{/each}
-					</select>
-					{#if takesValue(draft.op)}
-						<Input
-							class="h-8 max-w-64"
-							aria-label="Filter value"
-							placeholder="value"
-							bind:value={draft.value}
-							disabled={tab.running}
-						/>
-					{/if}
-					<Button
-						size="icon-sm"
-						variant="ghost"
-						type="button"
-						title="Remove condition"
-						aria-label="Remove condition"
-						disabled={tab.running}
-						onclick={() => drafts.splice(i, 1)}
-					>
-						<XIcon />
-					</Button>
+							{#if i > 0}
+								<label>
+									<span class="sr-only">Match</span>
+									<select
+										class="h-8 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+										aria-label="Condition connector"
+										bind:value={draft.connector}
+										disabled={tab.running}
+									>
+										<option value="AND">AND</option>
+										<option value="OR">OR</option>
+									</select>
+								</label>
+							{:else}
+								<span class="pl-2 text-xs text-muted-foreground">Where</span>
+							{/if}
+							<label class="min-w-0">
+								<span class="sr-only">Column</span>
+								<select
+									class="h-8 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+									aria-label="Filter column"
+									bind:value={draft.column}
+									disabled={tab.running}
+								>
+									<option value="">Choose column</option>
+									{#each filterColumns as name (name)}<option value={name}>{name}</option>{/each}
+								</select>
+							</label>
+							<label class="min-w-0">
+								<span class="sr-only">Operator</span>
+								<select
+									class="h-8 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+									aria-label="Filter operator"
+									bind:value={draft.op}
+									disabled={tab.running}
+								>
+									{#each FILTER_OPERATORS as operator (operator.value)}<option
+											value={operator.value}>{operator.label}</option
+										>{/each}
+								</select>
+							</label>
+							{#if takesValue(draft.op)}
+								<label class="min-w-0">
+									<span class="sr-only">Value</span>
+									<Input
+										class="h-8"
+										aria-label="Filter value"
+										placeholder="Value (suggestions from this page)"
+										list="filter-values-{draft.id}"
+										bind:value={draft.value}
+										disabled={tab.running}
+									/>
+									<datalist id="filter-values-{draft.id}">
+										{#each pageValues(draft.column) as value (value)}<option {value}
+											></option>{/each}
+									</datalist>
+								</label>
+							{:else}
+								<span></span>
+							{/if}
+							<Button
+								size="icon-sm"
+								variant="ghost"
+								type="button"
+								title="Remove condition"
+								aria-label="Remove condition"
+								disabled={tab.running}
+								onclick={() => {
+									drafts.splice(i, 1);
+									if (!drafts.length) drafts.push(blankDraft());
+								}}
+							>
+								<XIcon />
+							</Button>
+						</div>
+					{/each}
 				</div>
-			{/each}
-			<div class="flex items-center gap-2">
-				<Button
-					size="sm"
-					variant="ghost"
-					type="button"
-					disabled={tab.running}
-					onclick={() => drafts.push(blankDraft())}
-				>
-					<PlusIcon /> Add condition
-				</Button>
-				<Button size="sm" variant="outline" type="submit" disabled={tab.running}>Apply</Button>
-				{#if tab.filters.length}
+				{#if drafts.slice(1).some((draft) => draft.connector === 'AND') && drafts
+						.slice(1)
+						.some((draft) => draft.connector === 'OR')}
+					<p class="mt-2 text-xs text-muted-foreground">
+						AND conditions are evaluated before OR conditions.
+					</p>
+				{/if}
+				{#if filterError}<p class="mt-2 text-xs text-bad" role="alert">
+						Choose a column and enter a value for each condition.
+					</p>{/if}
+				<div class="mt-1.5 flex items-center gap-2">
 					<Button
 						size="sm"
 						variant="ghost"
 						type="button"
 						disabled={tab.running}
-						onclick={clearFilter}>Clear</Button
+						onclick={() => drafts.push(blankDraft())}><PlusIcon /> Add condition</Button
 					>
-				{/if}
+					<Button class="ml-auto" size="sm" type="submit" disabled={tab.running}
+						>Apply filters</Button
+					>
+					{#if tab.filters.length}
+						<Button
+							size="sm"
+							variant="ghost"
+							type="button"
+							disabled={tab.running}
+							onclick={clearFilter}>Clear filters</Button
+						>
+					{/if}
+				</div>
+			</form>
+		{:else if tab.filters.length}
+			<div
+				class="flex min-h-10 shrink-0 items-center gap-2 border-b border-cool/30 bg-cool/10 px-3 text-sm"
+				aria-label="Active filters"
+			>
+				<ListFilterIcon class="size-4 shrink-0 text-cool" />
+				<span class="shrink-0 font-semibold text-cool">Filtered</span>
+				<div class="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto whitespace-nowrap">
+					{#each tab.filters as filter, i (i)}
+						{#if i > 0}<span class="text-xs text-muted-foreground">{filter.connector}</span>{/if}
+						<span class="rounded border bg-background px-2 py-0.5 text-xs">
+							<strong>{filter.column}</strong>
+							{FILTER_OPERATORS.find((operator) => operator.value === filter.op)?.label}
+							{#if takesValue(filter.op)}<span class="text-cool">{filter.value}</span>{/if}
+						</span>
+					{/each}
+				</div>
+				<Button size="sm" variant="ghost" onclick={toggleFilter}>Edit</Button>
+				<Button size="sm" variant="ghost" disabled={tab.running} onclick={clearFilter}
+					>Clear filters</Button
+				>
 			</div>
-		</form>
+		{/if}
 		<div class="min-h-0 flex-1">
 			{#if tab.error}
 				<div

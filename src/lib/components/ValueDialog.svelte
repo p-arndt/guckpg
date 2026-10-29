@@ -10,6 +10,7 @@
 </script>
 
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { toast } from 'svelte-sonner';
@@ -115,7 +116,7 @@
 				{/if}
 				<Button variant="outline" onclick={() => save(null)}>Set NULL</Button>
 				<Button onclick={() => save(draft)}
-					>Apply <span class="measured opacity-70">⌘↵</span></Button
+					>Apply <span class="measured opacity-70">{shortcut('↵')}</span></Button
 				>
 			{/if}
 		</Dialog.Footer>

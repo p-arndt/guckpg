@@ -166,6 +166,27 @@ async fn browses_object_definitions_and_refreshes_materialized_views() {
     .await
     .unwrap();
 
+    let view = catalog::view_details(&conn.client, "it objects", "View Name")
+        .await
+        .unwrap();
+    let view = serde_json::to_value(view).unwrap();
+    assert!(view["query"].as_str().unwrap().contains("source table"));
+    assert!(
+        view["options"]
+            .as_str()
+            .unwrap()
+            .contains("security_barrier")
+    );
+    assert_eq!(
+        view["sources"],
+        serde_json::json!([{ "schema": "it objects", "name": "source table" }])
+    );
+    assert!(
+        catalog::view_details(&conn.client, "it objects", "Materialized View")
+            .await
+            .is_err()
+    );
+
     let objects = catalog::objects(&conn.client, "it objects").await.unwrap();
     let overloaded: Vec<_> = objects.iter().filter(|o| o.name == "overloaded").collect();
     assert_eq!(overloaded.len(), 2);
@@ -858,6 +879,105 @@ async fn refuses_revokes_that_another_grantor_would_keep() {
     assert!(still_granted);
 
     c.batch_execute("DROP TABLE it_revoke_t; DROP ROLE it_revoke_target, it_revoke_grantor;")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn creates_and_updates_visual_builder_views() {
+    let Some(conn) = direct().await else { return };
+    conn.run(
+        "CREATE SCHEMA it_visual_view;
+         CREATE TABLE it_visual_view.orders (customer_id integer, id integer, amount integer);
+         INSERT INTO it_visual_view.orders VALUES (1, 1, 20), (1, 2, 30), (2, 3, 10);
+         CREATE VIEW it_visual_view.report WITH (security_barrier = true) AS
+           SELECT orders.customer_id, pg_catalog.COUNT(DISTINCT orders.id) AS total
+           FROM it_visual_view.orders
+           WHERE (orders.amount > 10 OR orders.id = 3)
+           GROUP BY orders.customer_id
+           HAVING pg_catalog.COUNT(DISTINCT orders.id) > 1;",
+        10,
+    )
+    .await
+    .unwrap();
+    let before = catalog::view_details(&conn.client, "it_visual_view", "report")
+        .await
+        .unwrap();
+    let before = serde_json::to_value(before).unwrap();
+    assert!(
+        before["options"]
+            .as_str()
+            .unwrap()
+            .contains("security_barrier")
+    );
+    assert_eq!(
+        before["sources"],
+        serde_json::json!([{ "schema": "it_visual_view", "name": "orders" }])
+    );
+    let rows = conn
+        .run(
+            "SELECT * FROM it_visual_view.report ORDER BY customer_id",
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.results[0].rows.len(), 1);
+    assert_eq!(
+        rows.results[0].rows[0],
+        vec![Some("1".into()), Some("2".into())]
+    );
+    conn.run(
+        "CREATE OR REPLACE VIEW it_visual_view.report WITH (security_barrier = true) AS
+           SELECT orders.customer_id, pg_catalog.COUNT(DISTINCT orders.id) AS total
+           FROM it_visual_view.orders GROUP BY orders.customer_id
+           HAVING pg_catalog.COUNT(DISTINCT orders.id) > 0;",
+        10,
+    )
+    .await
+    .unwrap();
+    let rows = conn
+        .run(
+            "SELECT * FROM it_visual_view.report ORDER BY customer_id",
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.results[0].rows.len(), 2);
+    conn.run("DROP SCHEMA it_visual_view CASCADE", 10)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn boolean_view_filter_remains_equivalent_after_visual_import() {
+    let Some(conn) = direct().await else { return };
+    conn.run(
+        "CREATE SCHEMA it_boolean_view;
+         CREATE TABLE it_boolean_view.customers (id integer, active boolean);
+         INSERT INTO it_boolean_view.customers VALUES (1, true), (2, false), (3, null);
+         CREATE VIEW it_boolean_view.active_customers AS SELECT id FROM it_boolean_view.customers WHERE active;",
+        10,
+    )
+    .await
+    .unwrap();
+    let view = catalog::view_details(&conn.client, "it_boolean_view", "active_customers")
+        .await
+        .unwrap();
+    let view = serde_json::to_value(view).unwrap();
+    assert!(view["query"].as_str().unwrap().contains("WHERE active"));
+    conn.run(
+        "CREATE OR REPLACE VIEW it_boolean_view.active_customers AS
+         SELECT customers.id FROM it_boolean_view.customers WHERE customers.active IS TRUE;",
+        10,
+    )
+    .await
+    .unwrap();
+    let rows = conn
+        .run("SELECT id FROM it_boolean_view.active_customers", 10)
+        .await
+        .unwrap();
+    assert_eq!(rows.results[0].rows, vec![vec![Some("1".into())]]);
+    conn.run("DROP SCHEMA it_boolean_view CASCADE", 10)
         .await
         .unwrap();
 }

@@ -200,6 +200,18 @@ pub async fn relation_definition(
 }
 
 #[tauri::command]
+pub async fn view_details(
+    manager: State<'_, Manager>,
+    id: String,
+    database: String,
+    schema: String,
+    name: String,
+) -> AppResult<catalog::ViewDetails> {
+    let conn = manager.meta(&id, &database).await?;
+    catalog::view_details(&conn.client, &schema, &name).await
+}
+
+#[tauri::command]
 pub async fn refresh_materialized_view(
     manager: State<'_, Manager>,
     id: String,

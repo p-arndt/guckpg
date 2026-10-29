@@ -1,8 +1,12 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { shortcut } from '#lib/shortcut.js';
+	import { onMount, tick } from 'svelte';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import HistoryIcon from '@lucide/svelte/icons/history';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import NavicatImport from '#lib/components/NavicatImport.svelte';
 	import { toast } from 'svelte-sonner';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
@@ -28,6 +32,8 @@
 
 	$effect(() => appearance.apply(document.documentElement));
 
+	let sidebarOpen = $state(true);
+	let sidebarPane = $state<ReturnType<typeof Resizable.Pane> | null>(null);
 	let aiOpen = $state(false);
 	let aiPane = $state<ReturnType<typeof Resizable.Pane> | null>(null);
 	let aiSize = 26;
@@ -94,6 +100,17 @@
 		else toast.info('Connect to a database first');
 	}
 
+	function toggleSidebar() {
+		if (sidebarPane?.isCollapsed()) sidebarPane.expand();
+		else sidebarPane?.collapse();
+	}
+
+	async function focusConnections() {
+		if (sidebarPane?.isCollapsed()) sidebarPane.expand();
+		await tick();
+		sidebarView?.focusFilter();
+	}
+
 	function onContextMenu(e: MouseEvent) {
 		const target = e.target instanceof Element ? e.target : null;
 		const hasSelection = !!window.getSelection()?.toString();
@@ -117,7 +134,10 @@
 		const mod = e.metaKey || e.ctrlKey;
 		if (!mod) return;
 		const key = e.key.toLowerCase();
-		if (key === 'k' || (key === 'p' && !e.shiftKey)) {
+		if (key === 'b' && !e.shiftKey && !e.altKey) {
+			e.preventDefault();
+			toggleSidebar();
+		} else if (key === 'k' || (key === 'p' && !e.shiftKey)) {
 			e.preventDefault();
 			paletteOpen = !paletteOpen;
 		} else if (key === 't' && e.shiftKey) {
@@ -138,7 +158,7 @@
 			tabs.cycle(e.key === 'ArrowRight' ? 1 : -1);
 		} else if (key === 'f' && e.shiftKey) {
 			e.preventDefault();
-			sidebarView?.focusFilter();
+			void focusConnections();
 		}
 	}
 </script>
@@ -166,20 +186,32 @@
 		onOpenPalette={() => (paletteOpen = true)}
 		onToggleAi={() => (aiOpen = !aiOpen)}
 		{aiOpen}
+		{sidebarOpen}
+		onToggleSidebar={toggleSidebar}
 	/>
 	<div class="flex min-h-0 flex-1 pr-2 pb-2">
-		<Resizable.PaneGroup direction="horizontal" autoSaveId="guckpg.layout" class="min-h-0 flex-1">
+		<Resizable.PaneGroup
+			direction="horizontal"
+			autoSaveId="guckpg.layout"
+			class="sidebar-layout min-h-0 flex-1"
+		>
 			<Resizable.Pane
+				bind:this={sidebarPane}
 				id="sidebar"
 				order={1}
 				defaultSize={20}
 				minSize={12}
 				maxSize={45}
-				class="flex flex-col"
+				collapsible
+				collapsedSize={0}
+				onCollapse={() => (sidebarOpen = false)}
+				onExpand={() => (sidebarOpen = true)}
+				inert={!sidebarOpen}
+				class="flex flex-col overflow-hidden"
 			>
 				<Sidebar bind:this={sidebarView} onEdit={edit} onDelete={(c) => (deleting = c)} />
 			</Resizable.Pane>
-			<Resizable.Handle variant="gap" />
+			<Resizable.Handle variant="gap" disabled={!sidebarOpen} class={sidebarOpen ? '' : 'hidden'} />
 			<Resizable.Pane
 				id="main"
 				order={2}
@@ -209,11 +241,27 @@
 					<div class="flex h-full flex-col items-center justify-center px-10 pb-[10vh]">
 						<div class="flex w-full max-w-sm flex-col gap-5">
 							<div class="flex flex-col gap-1.5">
-								<h1 class="text-xl font-medium tracking-[-0.015em]">Nothing open yet</h1>
+								<h1 class="text-xl font-medium tracking-[-0.015em]">
+									{connections.list.length ? 'Nothing open yet' : 'Welcome to guckpg'}
+								</h1>
 								<p class="text-ink-2">
-									Pick a connection on the left, then double-click a table or start a query.
+									{connections.list.length
+										? 'Pick a connection in the sidebar, then double-click a table or start a query.'
+										: 'Add a connection to browse your database and run queries.'}
 								</p>
 							</div>
+							{#if !connections.list.length}
+								<div class="flex flex-wrap gap-2">
+									<Button size="sm" onclick={() => edit(null)}><PlusIcon /> Add connection</Button>
+									<NavicatImport labelled />
+								</div>
+							{:else if !sidebarOpen}
+								<div>
+									<Button size="sm" variant="outline" onclick={toggleSidebar}
+										>Show connections</Button
+									>
+								</div>
+							{/if}
 							<div class="flex flex-col">
 								{#snippet action(
 									label: string,
@@ -232,10 +280,10 @@
 										<kbd class="key ml-auto">{shortcut}</kbd>
 									</button>
 								{/snippet}
-								{@render action('New query', SquareTerminalIcon, '⌘T', newQuery)}
-								{@render action('Go to…', SearchIcon, '⌘K', () => (paletteOpen = true))}
+								{@render action('New query', SquareTerminalIcon, shortcut('T'), newQuery)}
+								{@render action('Go to…', SearchIcon, shortcut('K'), () => (paletteOpen = true))}
 								{#if tabs.closed.length}
-									{@render action('Reopen closed tab', HistoryIcon, '⌘⇧T', () =>
+									{@render action('Reopen closed tab', HistoryIcon, shortcut('T', true), () =>
 										tabs.reopenClosed((id) => !!connections.get(id))
 									)}
 								{/if}
@@ -275,7 +323,7 @@
 	bind:open={paletteOpen}
 	onNewQuery={newQuery}
 	onNewConnection={() => edit(null)}
-	onFilterConnections={() => sidebarView?.focusFilter()}
+	onFilterConnections={focusConnections}
 />
 
 <AlertDialog.Root
@@ -298,3 +346,26 @@
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
+
+<style>
+	@media (prefers-reduced-motion: no-preference) {
+		:global(
+			.sidebar-layout:has([data-pane-id='sidebar'][data-pane-state='collapsing'])
+				[data-pane-id='sidebar']
+		),
+		:global(
+			.sidebar-layout:has([data-pane-id='sidebar'][data-pane-state='expanding'])
+				[data-pane-id='sidebar']
+		),
+		:global(
+			.sidebar-layout:has([data-pane-id='sidebar'][data-pane-state='collapsing'])
+				[data-pane-id='main']
+		),
+		:global(
+			.sidebar-layout:has([data-pane-id='sidebar'][data-pane-state='expanding'])
+				[data-pane-id='main']
+		) {
+			transition: flex-grow 200ms ease;
+		}
+	}
+</style>

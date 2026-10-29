@@ -82,6 +82,7 @@ pub fn run() {
             commands::list_objects,
             commands::object_definition,
             commands::relation_definition,
+            commands::view_details,
             commands::refresh_materialized_view,
             commands::list_columns,
             commands::schema_diagram,

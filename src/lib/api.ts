@@ -167,6 +167,13 @@ export interface Column {
 	primaryKey: boolean;
 }
 
+export interface ViewDetails {
+	query: string;
+	options: string;
+	sources: { schema: string; name: string }[];
+	searchPath: string[];
+}
+
 export interface CompletionTable {
 	schema: string;
 	name: string;
@@ -344,6 +351,8 @@ export const api = {
 	) => invoke<string>('object_definition', { id, database, schema, kind, oid }),
 	relationDefinition: (id: string, database: string, schema: string, name: string) =>
 		invoke<string>('relation_definition', { id, database, schema, name }),
+	viewDetails: (id: string, database: string, schema: string, name: string) =>
+		invoke<ViewDetails>('view_details', { id, database, schema, name }),
 	refreshMaterializedView: (id: string, database: string, schema: string, name: string) =>
 		invoke<void>('refresh_materialized_view', { id, database, schema, name }),
 	listColumns: (id: string, database: string, schema: string, table: string) =>

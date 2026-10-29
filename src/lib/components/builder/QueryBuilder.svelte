@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
 	import { SvelteFlowProvider } from '@xyflow/svelte';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import PlayIcon from '@lucide/svelte/icons/play';
@@ -235,6 +236,7 @@
 				<Resizable.Pane defaultSize={42} minSize={15} class="flex min-h-0 flex-col">
 					<div class="flex h-9 shrink-0 items-center gap-1 px-2">
 						<span class="pl-1 text-xs text-muted-foreground">SQL</span>
+
 						<Button
 							size="icon-sm"
 							variant="ghost"
@@ -260,10 +262,10 @@
 							disabled={!built.sql || running}
 							onclick={() => onrun(built.sql)}
 						>
-							<PlayIcon class="fill-current" /> Run
+							<PlayIcon class="fill-current" /> Preview
 							<kbd
 								class="ml-1 rounded-[4px] bg-primary-foreground/15 px-1 text-[11px] leading-4 font-normal"
-								>⌘↵</kbd
+								>{shortcut('↵')}</kbd
 							>
 						</Button>
 					</div>

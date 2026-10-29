@@ -403,11 +403,11 @@
 
 	/* Opaque control fills turn into dark boxes on glass; light and shade in white and black
 	 * keep the art's colour. The shadcn aliases resolve on :root, so they are set again here. */
-	--color-paper-2: rgb(255 255 255 / 0.055);
-	--color-hover: rgb(255 255 255 / 0.075);
-	--color-rule: rgb(255 255 255 / 0.07);
-	--color-rule-2: rgb(255 255 255 / 0.11);
-	--color-field-edge: rgb(255 255 255 / 0.12);
+	--color-paper-2: rgb(255 255 255 / 0.1);
+	--color-hover: rgb(255 255 255 / 0.14);
+	--color-rule: rgb(255 255 255 / 0.11);
+	--color-rule-2: rgb(255 255 255 / 0.2);
+	--color-field-edge: rgb(255 255 255 / 0.24);
 	--border: var(--color-rule);
 	--input: var(--color-field-edge);
 }

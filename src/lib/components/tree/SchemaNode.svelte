@@ -1,9 +1,11 @@
 <script lang="ts">
 	import FolderIcon from '@lucide/svelte/icons/folder';
+	import PlusIcon from '@lucide/svelte/icons/plus';
 	import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
 	import { toast } from 'svelte-sonner';
 	import { api, errorMessage, type Relation, type SchemaObject } from '#lib/api.js';
 	import { groupSchemaObjects, groupRelations } from '#lib/objects.js';
+	import { editView, newView } from '#lib/view-actions.js';
 	import { Resource } from '#lib/resource.svelte.js';
 	import { ident, qualified } from '#lib/sql-quote.js';
 	import { catalog } from '#lib/state/catalog.js';
@@ -55,7 +57,17 @@
 
 	const tableName = (name: string) => qualified(schema, name);
 
-	const relationGroups = $derived(groupRelations(relations ?? []));
+	const relationGroups = $derived.by(() => {
+		if (!relations) return [];
+		const groups = groupRelations(relations);
+		if (!groups.some((group) => group.label === 'Tables'))
+			groups.unshift({ label: 'Tables', items: [] });
+		if (!groups.some((group) => group.label === 'Views')) {
+			const index = groups.findIndex((group) => group.label === 'Materialized views');
+			groups.splice(index < 0 ? groups.length : index, 0, { label: 'Views', items: [] });
+		}
+		return groups;
+	});
 	const objectGroups = $derived(groupSchemaObjects(objects));
 
 	async function openDefinition(object: SchemaObject | Relation) {
@@ -107,6 +119,9 @@
 		{/snippet}
 	</ContextMenu.Trigger>
 	<ContextMenu.Content class="w-48">
+		<ContextMenu.Item disabled={readOnly} onSelect={() => newView(connectionId, database, schema)}
+			>New view…</ContextMenu.Item
+		>
 		<ContextMenu.Item disabled={readOnly} onSelect={() => (creatingTable = true)}
 			>New table…</ContextMenu.Item
 		>
@@ -131,25 +146,45 @@
 	{#if error}
 		<p
 			class="py-1 pr-2 text-xs break-words text-destructive"
-			style:padding-left="{(depth + 1) * 14 + 26}px"
+			style:padding-left="{(depth + 1) * 10 + 22}px"
 		>
 			{error}
 		</p>
 	{:else if relations && relations.length === 0 && objects.length === 0}
 		<p
 			class="py-1 text-[13px] text-muted-foreground"
-			style:padding-left="{(depth + 1) * 14 + 26}px"
+			style:padding-left="{(depth + 1) * 10 + 22}px"
 		>
 			No objects
 		</p>
 	{/if}
 	{#each relationGroups as group (group.label)}
-		<p
-			class="pt-2 pb-1 text-xs text-muted-foreground"
-			style:padding-left="{(depth + 1) * 14 + 26}px"
+		<div
+			class="flex shrink-0 items-center gap-1 pt-1 pr-2 pb-0.5 text-xs text-muted-foreground"
+			style:padding-left="{(depth + 1) * 10 + 22}px"
 		>
-			{group.label}
-		</p>
+			<span class="min-w-0 flex-1">{group.label}</span>
+			{#if (group.label === 'Views' || group.label === 'Tables') && !readOnly}
+				<button
+					type="button"
+					class="flex size-5 items-center justify-center rounded-md hover:bg-hover hover:text-foreground"
+					aria-label="New {group.label === 'Views' ? 'view' : 'table'} in {schema}"
+					title="New {group.label === 'Views' ? 'view' : 'table'} in {schema}"
+					onclick={() =>
+						group.label === 'Views'
+							? newView(connectionId, database, schema)
+							: (creatingTable = true)}><PlusIcon class="size-4" /></button
+				>
+			{/if}
+		</div>
+		{#if group.label === 'Views' && group.items.length === 0 && !readOnly}
+			<button
+				type="button"
+				class="shrink-0 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
+				style:padding-left="{(depth + 1) * 10 + 22}px"
+				onclick={() => newView(connectionId, database, schema)}>Create your first view…</button
+			>
+		{/if}
 		{#each group.items as rel (rel.name)}
 			<ContextMenu.Root>
 				<ContextMenu.Trigger>
@@ -158,6 +193,9 @@
 							{...props}
 							depth={depth + 1}
 							label={rel.name}
+							title={formatEstimate(rel.estimatedRows)
+								? `${rel.name} · ${formatEstimate(rel.estimatedRows)} rows`
+								: rel.name}
 							ondblclick={() => tabs.openTable(connectionId, database, schema, rel.name)}
 							onkeydown={(e) => {
 								if (e.key === 'Enter') tabs.openTable(connectionId, database, schema, rel.name);
@@ -166,13 +204,6 @@
 							{#snippet icon()}
 								{@const style = kindStyle(rel.kind)}
 								<style.icon class="size-3.5 {style.color}" />
-							{/snippet}
-							{#snippet trailing()}
-								<span
-									class="measured text-xs text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
-								>
-									{formatEstimate(rel.estimatedRows)}
-								</span>
 							{/snippet}
 						</TreeRow>
 					{/snippet}
@@ -191,6 +222,13 @@
 					>
 						Open data
 					</ContextMenu.Item>
+					{#if rel.kind === 'view'}
+						<ContextMenu.Item
+							disabled={readOnly}
+							onSelect={() => editView(connectionId, database, schema, rel.name)}
+							>Edit visually</ContextMenu.Item
+						>
+					{/if}
 					{#if rel.kind === 'view' || rel.kind === 'materialized'}
 						<ContextMenu.Item onSelect={() => openDefinition(rel)}>Open definition</ContextMenu.Item
 						>
@@ -228,8 +266,8 @@
 	{/each}
 	{#each objectGroups as group (group.kind)}
 		<p
-			class="pt-2 pb-1 text-xs text-muted-foreground"
-			style:padding-left="{(depth + 1) * 14 + 26}px"
+			class="shrink-0 pt-1 pb-0.5 text-xs text-muted-foreground"
+			style:padding-left="{(depth + 1) * 10 + 22}px"
 		>
 			{group.label}
 		</p>

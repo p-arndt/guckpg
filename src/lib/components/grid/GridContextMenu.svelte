@@ -28,6 +28,7 @@
 </script>
 
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
 	import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
 
 	interface Props {
@@ -48,7 +49,7 @@
 		</ContextMenu.Item>
 		<ContextMenu.Item onSelect={() => actions.copyRows(false)}>
 			Copy {what}
-			<ContextMenu.Shortcut>⌘C</ContextMenu.Shortcut>
+			<ContextMenu.Shortcut>{shortcut('C')}</ContextMenu.Shortcut>
 		</ContextMenu.Item>
 		<ContextMenu.Item onSelect={() => actions.copyRows(true)}>
 			Copy {what} with header
@@ -85,17 +86,17 @@
 			<ContextMenu.Item onSelect={actions.addRow}>Add row</ContextMenu.Item>
 			<ContextMenu.Item disabled={!canUndo} onSelect={actions.undo}>
 				Undo
-				<ContextMenu.Shortcut>⌘Z</ContextMenu.Shortcut>
+				<ContextMenu.Shortcut>{shortcut('Z')}</ContextMenu.Shortcut>
 			</ContextMenu.Item>
 			<ContextMenu.Separator />
 		{/if}
 		<ContextMenu.Item disabled={!target.selected} onSelect={actions.copyValue}>
 			Copy value
-			<ContextMenu.Shortcut>⌘C</ContextMenu.Shortcut>
+			<ContextMenu.Shortcut>{shortcut('C')}</ContextMenu.Shortcut>
 		</ContextMenu.Item>
 		<ContextMenu.Item disabled={!target.selected} onSelect={actions.copyRow}>
 			Copy row
-			<ContextMenu.Shortcut>⇧⌘C</ContextMenu.Shortcut>
+			<ContextMenu.Shortcut>{shortcut('C', true)}</ContextMenu.Shortcut>
 		</ContextMenu.Item>
 		<ContextMenu.Item disabled={!target.selected} onSelect={actions.openValue}>
 			{editable ? 'Edit value…' : 'View value'}

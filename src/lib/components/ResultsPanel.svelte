@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import TableIcon from '@lucide/svelte/icons/table-2';
@@ -179,9 +180,9 @@
 				</span>
 				<p class="text-sm text-ink-2">Run a query to see results</p>
 				<div class="grid grid-cols-[max-content_max-content] items-center gap-x-3 gap-y-2">
-					<kbd class="key justify-self-end">⌘ ↵</kbd>
+					<kbd class="key justify-self-end">{shortcut('↵')}</kbd>
 					<span>run the statement at the cursor</span>
-					<kbd class="key justify-self-end">⇧ ⌘ ↵</kbd>
+					<kbd class="key justify-self-end">{shortcut('↵', true)}</kbd>
 					<span>run the whole script</span>
 				</div>
 			</div>

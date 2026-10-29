@@ -4,6 +4,10 @@
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import { editView } from '#lib/view-actions.js';
+	import { catalog } from '#lib/state/catalog.js';
+	import type { RelationKind } from '#lib/api.js';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -36,6 +40,23 @@
 	const filterColumns = $derived(
 		tab.columns.length ? tab.columns.map((c) => c.name) : (result?.columns ?? [])
 	);
+	let relationKind = $state<RelationKind | null>(null);
+	$effect(() => {
+		const { connectionId, database, schema, table } = tab;
+		let current = true;
+		relationKind = null;
+		catalog.relations(connectionId, database, schema).then(
+			(relations) => {
+				if (current) relationKind = relations.find((r) => r.name === table)?.kind ?? null;
+			},
+			() => {
+				if (current) relationKind = null;
+			}
+		);
+		return () => {
+			current = false;
+		};
+	});
 
 	type Draft = FilterCondition & { id: string };
 	const blankDraft = (): Draft => ({
@@ -106,6 +127,16 @@
 					: ''}</Button
 			>
 		{/each}
+		{#if relationKind === 'view'}
+			<Button
+				size="sm"
+				variant="outline"
+				class="ml-auto"
+				disabled={connection?.readOnly ?? true}
+				onclick={() => editView(tab.connectionId, tab.database, tab.schema, tab.table)}
+				><PencilIcon /> Edit view</Button
+			>
+		{/if}
 	</div>
 	<div
 		class="min-h-0 flex-1 flex-col"

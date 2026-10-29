@@ -52,7 +52,7 @@ describe('buildSql', () => {
 	it('selects everything from a single table', () => {
 		const model = emptyModel();
 		addTable(model, 'public', 'customers');
-		expect(buildSql(model).sql).toBe('SELECT *\nFROM customers;');
+		expect(buildSql(model).sql).toBe('SELECT *\nFROM public.customers;');
 	});
 
 	it('qualifies tables outside public', () => {
@@ -79,8 +79,8 @@ describe('buildSql', () => {
 			sql: [
 				'SELECT orders.id,',
 				'       customers.name',
-				'FROM orders',
-				'JOIN customers ON orders.customer_id = customers.id',
+				'FROM public.orders',
+				'JOIN public.customers ON orders.customer_id = customers.id',
 				"WHERE customers.name ILIKE '%o''b%'",
 				'ORDER BY orders.id DESC',
 				'LIMIT 50;'
@@ -100,7 +100,7 @@ describe('buildSql', () => {
 			from: { tableId: orders.id, column: 'customer_id' },
 			to: { tableId: customers.id, column: 'id' }
 		});
-		expect(buildSql(model).sql).toContain('RIGHT JOIN orders ON');
+		expect(buildSql(model).sql).toContain('RIGHT JOIN public.orders ON');
 	});
 
 	it('cross joins and warns about tables without a join', () => {
@@ -108,7 +108,7 @@ describe('buildSql', () => {
 		addTable(model, 'public', 'a');
 		addTable(model, 'public', 'b');
 		const built = buildSql(model);
-		expect(built.sql).toBe('SELECT *\nFROM a\nCROSS JOIN b;');
+		expect(built.sql).toBe('SELECT *\nFROM public.a\nCROSS JOIN public.b;');
 		expect(built.problems).toHaveLength(1);
 	});
 
@@ -117,7 +117,7 @@ describe('buildSql', () => {
 		addTable(model, 'public', 'employees');
 		const manager = addTable(model, 'public', 'employees');
 		expect(manager.alias).toBe('employees_2');
-		expect(buildSql(model).sql).toContain('CROSS JOIN employees AS employees_2');
+		expect(buildSql(model).sql).toContain('CROSS JOIN public.employees AS employees_2');
 	});
 
 	it('groups by the plain columns when one is aggregated', () => {
@@ -174,7 +174,7 @@ describe('buildSql', () => {
 		model.limit = 'ten';
 		model.offset = '20';
 		const built = buildSql(model);
-		expect(built.sql).toBe('SELECT *\nFROM orders\nOFFSET 20;');
+		expect(built.sql).toBe('SELECT *\nFROM public.orders\nOFFSET 20;');
 		expect(built.problems).toEqual(['LIMIT must be a whole number.']);
 	});
 
@@ -182,7 +182,7 @@ describe('buildSql', () => {
 		const model = emptyModel();
 		addTable(model, 'public', 'orders');
 		model.distinct = true;
-		expect(buildSql(model).sql).toBe('SELECT DISTINCT *\nFROM orders;');
+		expect(buildSql(model).sql).toBe('SELECT DISTINCT *\nFROM public.orders;');
 	});
 });
 
@@ -222,5 +222,21 @@ describe('model edits', () => {
 		expect(model.columns).toHaveLength(1);
 		toggleColumn(model, { tableId: t.id, column: 'id' });
 		expect(model.columns).toHaveLength(0);
+	});
+});
+
+describe('condition groups', () => {
+	it('blocks unmatched parentheses instead of running a different query', () => {
+		const model = emptyModel();
+		const table = addTable(model, 'public', 'orders');
+		model.filters.push({
+			id: 'f',
+			connector: 'AND',
+			column: { tableId: table.id, column: 'id' },
+			operator: '=',
+			value: '1',
+			openGroups: 1
+		});
+		expect(buildSql(model)).toEqual({ sql: '', problems: ['Check the condition parentheses.'] });
 	});
 });

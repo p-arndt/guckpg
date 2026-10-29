@@ -1,9 +1,15 @@
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
+	import { onMount, tick } from 'svelte';
 	import PlayIcon from '@lucide/svelte/icons/play';
 	import ListVideoIcon from '@lucide/svelte/icons/list-video';
 	import SquareIcon from '@lucide/svelte/icons/square';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import ListFilterIcon from '@lucide/svelte/icons/list-filter';
+	import SaveIcon from '@lucide/svelte/icons/save';
+	import InfoIcon from '@lucide/svelte/icons/info';
+	import { confirmation } from '#lib/state/confirm.svelte.js';
+	import { replaceViewSql, viewEditorContent } from '#lib/view-builder.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
@@ -18,6 +24,7 @@
 	import QueryBuilder from './builder/QueryBuilder.svelte';
 	import ResultsPanel from './ResultsPanel.svelte';
 	import ExplainPlan from './ExplainPlan.svelte';
+	import SaveViewDialog from './SaveViewDialog.svelte';
 
 	interface Props {
 		tab: QueryTab;
@@ -25,6 +32,7 @@
 
 	let { tab }: Props = $props();
 
+	let saveViewOpen = $state(false);
 	let editor = $state<SqlEditor | null>(null);
 	let databases = $state<string[]>([]);
 	let completion = $state<CompletionTable[]>([]);
@@ -34,16 +42,35 @@
 
 	const builder = $derived(tab.builder?.database === tab.database ? tab.builder.model : null);
 
-	function toggleBuilder() {
+	function makeRoomForBuilder() {
+		const size = editorPane?.getSize() ?? 100;
+		if (size < 62) {
+			sizeBeforeBuilder = size;
+			editorPane?.resize(62);
+		}
+	}
+
+	onMount(async () => {
+		await tick();
+		if (tab.builderOpen) makeRoomForBuilder();
+	});
+
+	async function toggleBuilder() {
+		if (!tab.builderOpen && tab.viewSqlSnapshot !== null && tab.sql !== tab.viewSqlSnapshot) {
+			const confirmed = await confirmation.ask({
+				title: 'Discard SQL changes?',
+				description:
+					'The visual builder cannot include the SQL edits you made. Discard them to return to the visual editor.',
+				confirmLabel: 'Discard SQL changes',
+				destructive: true
+			});
+			if (!confirmed) return;
+			tab.sql = tab.viewSqlSnapshot;
+		}
 		tab.builderOpen = !tab.builderOpen;
 		if (tab.builderOpen) {
 			if (!builder) tab.builder = { database: tab.database, model: emptyModel() };
-			const size = editorPane?.getSize() ?? 100;
-			// The canvas needs more height than an editor does.
-			if (size < 62) {
-				sizeBeforeBuilder = size;
-				editorPane?.resize(62);
-			}
+			makeRoomForBuilder();
 		} else if (sizeBeforeBuilder !== null) {
 			editorPane?.resize(sizeBeforeBuilder);
 			sizeBeforeBuilder = null;
@@ -56,6 +83,7 @@
 	});
 
 	const connection = $derived(connections.get(tab.connectionId));
+	const editingView = $derived(tab.editingView?.database === tab.database ? tab.editingView : null);
 
 	const rowLimitLabel = (n: string) => Number(n).toLocaleString('en-US');
 	const quietTrigger =
@@ -133,8 +161,23 @@
 	}
 
 	function openInEditor(sql: string) {
-		tab.sql = tab.sql.trim() ? `${tab.sql.trimEnd()}\n\n${sql}\n` : `${sql}\n`;
-		toggleBuilder();
+		const text = editingView
+			? replaceViewSql(editingView.schema, editingView.name, editingView.details, sql)
+			: sql;
+		const { prefix, sql: editorSql } = viewEditorContent(
+			tab.sql,
+			editingView ? tab.viewSqlSnapshot : null,
+			editingView ? tab.viewSqlPrefix : null,
+			text
+		);
+		tab.sql = editorSql;
+		if (editingView) {
+			tab.viewSqlPrefix = prefix;
+			tab.viewSqlSnapshot = tab.sql;
+			tab.viewNotice =
+				'You are editing the view as SQL. Run the statement to apply changes; SQL edits do not update the visual builder.';
+		}
+		void toggleBuilder();
 	}
 
 	async function rerun() {
@@ -146,6 +189,18 @@
 
 <div class="flex h-full min-h-0 flex-col">
 	<div class="flex h-11 shrink-0 items-center gap-1 px-2">
+		{#if tab.creatingView || editingView}
+			<span
+				class="max-w-48 truncate pr-2 text-[13px] font-medium"
+				title={editingView
+					? `${editingView.schema}.${editingView.name}`
+					: `New view in ${tab.viewSchema}`}
+			>
+				{editingView
+					? `View · ${editingView.schema}.${editingView.name}`
+					: `New view · ${tab.viewSchema}`}
+			</span>
+		{/if}
 		<Select.Root type="single" bind:value={tab.database} disabled={tab.running}>
 			<Select.Trigger size="sm" class={quietTrigger} aria-label="Database">
 				<DatabaseIcon class="size-3.5 text-muted-foreground" />
@@ -178,10 +233,29 @@
 				size="sm"
 				variant={tab.builderOpen ? 'secondary' : 'ghost'}
 				aria-pressed={tab.builderOpen}
+				disabled={!!tab.viewNotice && !builder}
 				onclick={toggleBuilder}
 			>
-				<ListFilterIcon /> Query builder
+				<ListFilterIcon />
+				{tab.creatingView || editingView ? 'Visual editor' : 'Query builder'}
 			</Button>
+			{#if tab.builderOpen && builder}
+				{@const built = buildSql(builder)}
+				<Button
+					size="sm"
+					variant="outline"
+					disabled={!built.sql || tab.running || (connection?.readOnly ?? true)}
+					title={!built.sql
+						? 'Add a table and complete the query first'
+						: connection?.readOnly
+							? 'Read-only connection'
+							: 'Review the view SQL'}
+					onclick={() => (saveViewOpen = true)}
+				>
+					<SaveIcon />
+					{editingView ? 'Save view' : tab.creatingView ? 'Create view' : 'Save as view'}
+				</Button>
+			{/if}
 			<Button size="sm" variant="ghost" disabled={tab.running} onclick={explain}>Explain</Button>
 			{#if tab.running}
 				<Button size="sm" variant="ghost" class="text-bad" onclick={() => tab.cancel()}>
@@ -202,7 +276,9 @@
 						</Button>
 					{/snippet}
 				</Tooltip.Trigger>
-				<Tooltip.Content>Run the whole script <kbd class="key">⇧⌘↵</kbd></Tooltip.Content>
+				<Tooltip.Content
+					>Run the whole script <kbd class="key">{shortcut('↵', true)}</kbd></Tooltip.Content
+				>
 			</Tooltip.Root>
 			<Tooltip.Root>
 				<Tooltip.Trigger>
@@ -219,10 +295,11 @@
 								} else void execute(false);
 							}}
 						>
-							<PlayIcon class="fill-current" /> Run
+							<PlayIcon class="fill-current" />
+							{tab.builderOpen ? 'Preview' : 'Run'}
 							<kbd
 								class="ml-1 rounded-[4px] bg-primary-foreground/15 px-1 text-[11px] leading-4 font-normal"
-								>⌘↵</kbd
+								>{shortcut('↵')}</kbd
 							>
 						</Button>
 					{/snippet}
@@ -236,6 +313,14 @@
 		</div>
 	</div>
 
+	{#if tab.viewNotice && !tab.builderOpen}
+		<div
+			class="flex shrink-0 items-start gap-2 border-t border-b bg-signal-soft px-3 py-2 text-xs text-ink-2"
+			role="status"
+		>
+			<InfoIcon class="mt-0.5 size-4 shrink-0 text-signal-text" /><span>{tab.viewNotice}</span>
+		</div>
+	{/if}
 	<Resizable.PaneGroup direction="vertical" autoSaveId="guckpg.query" class="min-h-0 flex-1">
 		<Resizable.Pane bind:this={editorPane} defaultSize={45} minSize={10}>
 			<div class="h-full" class:hidden={tab.builderOpen}>
@@ -283,3 +368,23 @@
 		</Resizable.Pane>
 	</Resizable.PaneGroup>
 </div>
+
+{#if builder && saveViewOpen}
+	{@const built = buildSql(builder)}
+	<SaveViewDialog
+		bind:open={saveViewOpen}
+		connectionId={tab.connectionId}
+		database={tab.database}
+		query={built.sql}
+		problems={built.problems}
+		defaultSchema={tab.viewSchema}
+		{editingView}
+		onCreated={(schema, name, details) => {
+			tab.creatingView = false;
+			if (details) {
+				tab.title = `View: ${name}`;
+				tab.editingView = { database: tab.database, schema, name, details };
+			}
+		}}
+	/>
+{/if}

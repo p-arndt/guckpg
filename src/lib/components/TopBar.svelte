@@ -1,10 +1,12 @@
 <script lang="ts">
+	import { shortcut } from '#lib/shortcut.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import BackupDialog from './BackupDialog.svelte';
 	import AppearanceSettings from './AppearanceSettings.svelte';
 	import SchemaCompare from './SchemaCompare.svelte';
 	import SessionMonitor from './SessionMonitor.svelte';
 	import BotIcon from '@lucide/svelte/icons/bot';
+	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
@@ -27,9 +29,12 @@
 		onOpenPalette: () => void;
 		onToggleAi: () => void;
 		aiOpen: boolean;
+		sidebarOpen: boolean;
+		onToggleSidebar: () => void;
 	}
 
-	let { onNewQuery, onOpenPalette, onToggleAi, aiOpen }: Props = $props();
+	let { onNewQuery, onOpenPalette, onToggleAi, aiOpen, sidebarOpen, onToggleSidebar }: Props =
+		$props();
 
 	/** Tauri on macOS draws the traffic lights over the page (`titleBarStyle: Overlay`). */
 	const overlayTitleBar =
@@ -118,6 +123,16 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 	class="flex h-12 shrink-0 items-center gap-3 pr-2 {overlayTitleBar ? 'pl-[84px]' : 'pl-3'}"
 	data-tauri-drag-region
 >
+	<Button
+		size="icon-sm"
+		variant="ghost"
+		class="aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-hover aria-expanded:hover:text-foreground"
+		aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+		aria-expanded={sidebarOpen}
+		aria-controls="sidebar"
+		title={`${sidebarOpen ? 'Hide' : 'Show'} sidebar (${shortcut('B')})`}
+		onclick={onToggleSidebar}><PanelLeftIcon /></Button
+	>
 	<span class="text-[15px] font-semibold tracking-[-0.02em]" data-tauri-drag-region>guckpg</span>
 
 	<div class="flex min-w-0 flex-1 basis-0 items-center gap-2 text-sm" data-tauri-drag-region>
@@ -132,7 +147,7 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 							title="Connection actions"
 						>
 							<ServerIcon
-								class="size-3.5 shrink-0 text-muted-foreground"
+								class="size-4 shrink-0 text-muted-foreground"
 								style={context.connection.color ? `color: ${context.connection.color}` : ''}
 							/>
 							<span class="truncate font-medium">{context.connection.name}</span>
@@ -143,7 +158,7 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 				<DropdownMenu.Content align="start" class="w-56">
 					<DropdownMenu.Item onSelect={onNewQuery}>
 						<SquareTerminalIcon /> New query
-						<DropdownMenu.Shortcut>⌘T</DropdownMenu.Shortcut>
+						<DropdownMenu.Shortcut>{shortcut('T')}</DropdownMenu.Shortcut>
 					</DropdownMenu.Item>
 					<DropdownMenu.Sub>
 						<DropdownMenu.SubTrigger>
@@ -234,9 +249,9 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 		class="flex h-8 w-full max-w-md min-w-40 flex-[2] basis-0 items-center gap-2 rounded-lg border bg-background px-2.5 text-[13px] text-muted-foreground shadow-panel transition-[border-color,color] duration-(--dur-micro) hover:border-rule-2 hover:text-foreground"
 		onclick={onOpenPalette}
 	>
-		<SearchIcon class="size-3.5 shrink-0" />
+		<SearchIcon class="size-4 shrink-0" />
 		<span class="truncate">Go to table, tab, connection…</span>
-		<kbd class="key ml-auto">⌘K</kbd>
+		<kbd class="key ml-auto">{shortcut('K')}</kbd>
 	</button>
 
 	<div class="flex flex-1 basis-0 items-center justify-end gap-1" data-tauri-drag-region>
@@ -245,7 +260,7 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 			variant="outline"
 			disabled={!context}
 			onclick={onNewQuery}
-			title="New query (⌘T)"
+			title="New query ({shortcut('T')})"
 		>
 			<SquareTerminalIcon /> New query
 		</Button>

@@ -68,7 +68,7 @@
 	{#if error}
 		<p
 			class="py-1 pr-2 text-xs break-words text-destructive"
-			style:padding-left="{(depth + 1) * 14 + 26}px"
+			style:padding-left="{(depth + 1) * 10 + 22}px"
 		>
 			{error}
 		</p>

@@ -11,6 +11,8 @@
 		warnings: string[];
 	}
 
+	let { labelled = false }: { labelled?: boolean } = $props();
+
 	let open = $state(false);
 	let busy = $state(false);
 	let error = $state('');
@@ -46,13 +48,14 @@
 </script>
 
 <Button
-	size="icon-xs"
-	variant="ghost"
+	size={labelled ? 'sm' : 'icon-xs'}
+	variant={labelled ? 'outline' : 'ghost'}
 	title="Import Navicat connections"
 	aria-label="Import Navicat connections"
 	onclick={() => (open = true)}
 >
 	<FileInputIcon />
+	{#if labelled}Import from Navicat{/if}
 </Button>
 
 <Dialog.Root bind:open>

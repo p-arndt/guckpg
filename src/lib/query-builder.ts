@@ -1,5 +1,5 @@
 import type { ForeignKey } from './api.js';
-import { ident, qualified, valueLiteral as literal } from './sql-quote.js';
+import { ident, literal as stringLiteral, valueLiteral as literal } from './sql-quote.js';
 
 export { ident, literal };
 
@@ -22,12 +22,16 @@ export const OPERATORS = [
 	'IN',
 	'NOT IN',
 	'IS NULL',
-	'IS NOT NULL'
+	'IS NOT NULL',
+	'IS TRUE',
+	'IS FALSE',
+	'IS NOT TRUE',
+	'IS NOT FALSE'
 ] as const;
 export type Operator = (typeof OPERATORS)[number];
 
 export function takesValue(operator: Operator): boolean {
-	return operator !== 'IS NULL' && operator !== 'IS NOT NULL';
+	return !operator.startsWith('IS ');
 }
 
 export interface ColumnRef {
@@ -48,6 +52,10 @@ export interface BuilderTable {
 export interface SelectedColumn extends ColumnRef {
 	aggregate: Aggregate | null;
 	alias: string;
+	/** A catalog-resolved built-in aggregate imported from a view. */
+	builtinAggregate?: boolean;
+	aggregateDistinct?: boolean;
+	countAll?: boolean;
 }
 
 /** `from` keeps its rows for LEFT, `to` for RIGHT. */
@@ -64,6 +72,14 @@ export interface BuilderFilter {
 	column: ColumnRef | null;
 	operator: Operator;
 	value: string;
+	/** Preserve a text literal's explicit type when importing an existing view. */
+	literalCast?: 'text';
+	openGroups?: number;
+	closeGroups?: number;
+	havingAggregate?: Aggregate;
+	havingDistinct?: boolean;
+	havingBuiltin?: boolean;
+	havingCountAll?: boolean;
 }
 
 export interface BuilderSort {
@@ -77,6 +93,7 @@ export interface BuilderModel {
 	columns: SelectedColumn[];
 	joins: BuilderJoin[];
 	filters: BuilderFilter[];
+	having?: BuilderFilter[];
 	sorts: BuilderSort[];
 	distinct: boolean;
 	limit: string;
@@ -89,6 +106,7 @@ export function emptyModel(): BuilderModel {
 		columns: [],
 		joins: [],
 		filters: [],
+		having: [],
 		sorts: [],
 		distinct: false,
 		limit: '',
@@ -103,7 +121,7 @@ export function newId(prefix: string): string {
 }
 
 function tableSql(table: BuilderTable): string {
-	const name = qualified(table.schema, table.name);
+	const name = `${ident(table.schema)}.${ident(table.name)}`;
 	return table.alias === table.name ? name : `${name} AS ${ident(table.alias)}`;
 }
 
@@ -208,8 +226,10 @@ export function buildSql(model: BuilderModel): BuiltQuery {
 	const byId = new Map(model.tables.map((table) => [table.id, table]));
 	const col = (ref: ColumnRef) => `${ident(byId.get(ref.tableId)!.alias)}.${ident(ref.column)}`;
 
+	const aggregateSql = (c: SelectedColumn) =>
+		`${c.builtinAggregate ? 'pg_catalog.' : ''}${c.aggregate}(${c.aggregateDistinct ? 'DISTINCT ' : ''}${c.countAll ? '*' : col(c)})`;
 	const select = model.columns.map((c) => {
-		const expression = c.aggregate ? `${c.aggregate}(${col(c)})` : col(c);
+		const expression = c.aggregate ? aggregateSql(c) : col(c);
 		return c.alias.trim() ? `${expression} AS ${ident(c.alias.trim())}` : expression;
 	});
 	const lines = [
@@ -248,10 +268,29 @@ export function buildSql(model: BuilderModel): BuiltQuery {
 		placed.add(table.id);
 	}
 
-	const filters = model.filters.filter((filter) => filter.column);
-	if (filters.length) {
+	const filterSql = (
+		filters: BuilderFilter[],
+		expressionFor: (ref: ColumnRef, filter: BuilderFilter) => string
+	): string | null => {
+		filters = filters.filter((filter) => filter.column);
+		if (!filters.length) return '';
+		let depth = 0;
+		let validGroups = true;
 		const parts = filters.map((filter, i) => {
-			let expression = `${col(filter.column!)} ${filter.operator}`;
+			const opens = filter.openGroups ?? 0;
+			const closes = filter.closeGroups ?? 0;
+			if (
+				!Number.isSafeInteger(opens) ||
+				!Number.isSafeInteger(closes) ||
+				opens < 0 ||
+				closes < 0 ||
+				opens > 20 ||
+				closes > 20
+			)
+				validGroups = false;
+			depth += opens - closes;
+			if (depth < 0) validGroups = false;
+			let expression = `${expressionFor(filter.column!, filter)} ${filter.operator}`;
 			if (filter.operator === 'IN' || filter.operator === 'NOT IN') {
 				const values = filter.value
 					.split(',')
@@ -259,18 +298,52 @@ export function buildSql(model: BuilderModel): BuiltQuery {
 					.filter(Boolean);
 				expression += ` (${values.map(literal).join(', ')})`;
 				if (!values.length)
-					problems.push(`${col(filter.column!)} ${filter.operator} needs values.`);
+					problems.push(
+						`${expressionFor(filter.column!, filter)} ${filter.operator} needs values.`
+					);
 			} else if (takesValue(filter.operator)) {
-				expression += ` ${literal(filter.value)}`;
+				expression +=
+					filter.literalCast === 'text'
+						? ` ${stringLiteral(filter.value)}::pg_catalog.text`
+						: ` ${literal(filter.value)}`;
 			}
+			expression = `${'('.repeat(Math.max(0, Math.min(20, opens || 0)))}${expression}${')'.repeat(Math.max(0, Math.min(20, closes || 0)))}`;
 			return i === 0 ? expression : `${filter.connector} ${expression}`;
 		});
-		lines.push(`WHERE ${parts.join('\n  ')}`);
-	}
+		if (!validGroups || depth !== 0) return null;
+		return parts.join('\n  ');
+	};
+	const where = filterSql(model.filters, col);
+	if (where === null) return { sql: '', problems: ['Check the condition parentheses.'] };
+	if (where) lines.push(`WHERE ${where}`);
 
-	const aggregating = model.columns.some((c) => c.aggregate);
+	const havingFilters = model.having ?? [];
+	const aggregating =
+		model.columns.some((c) => c.aggregate) ||
+		havingFilters.some((f) => f.column && f.havingAggregate);
 	const grouped = aggregating ? model.columns.filter((c) => !c.aggregate).map(col) : [];
 	if (grouped.length) lines.push(`GROUP BY ${grouped.join(', ')}`);
+	if (
+		havingFilters.some(
+			(f) =>
+				f.column &&
+				(!f.havingAggregate ||
+					(f.havingCountAll && (f.havingAggregate !== 'COUNT' || f.havingDistinct)))
+		)
+	)
+		return { sql: '', problems: ['Choose a valid aggregate for each HAVING condition.'] };
+	const having = filterSql(havingFilters, (ref, filter) => {
+		return aggregateSql({
+			...ref,
+			aggregate: filter.havingAggregate!,
+			alias: '',
+			builtinAggregate: filter.havingBuiltin,
+			aggregateDistinct: filter.havingDistinct,
+			countAll: filter.havingCountAll
+		});
+	});
+	if (having === null) return { sql: '', problems: ['Check the HAVING parentheses.'] };
+	if (having) lines.push(`HAVING ${having}`);
 
 	const sorts = model.sorts.filter((sort) => sort.column);
 	if (sorts.length) {
@@ -282,9 +355,7 @@ export function buildSql(model: BuilderModel): BuiltQuery {
 			);
 			let term = col(ref);
 			if (aggregated) {
-				term = aggregated.alias.trim()
-					? ident(aggregated.alias.trim())
-					: `${aggregated.aggregate}(${col(ref)})`;
+				term = aggregated.alias.trim() ? ident(aggregated.alias.trim()) : aggregateSql(aggregated);
 			} else if (grouped.length && !grouped.includes(col(ref))) {
 				problems.push(`Sorting by ${col(ref)} needs it as a column or an aggregate.`);
 			}

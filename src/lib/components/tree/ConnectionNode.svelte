@@ -17,6 +17,7 @@
 	interface Props {
 		connection: ConnectionConfig;
 		depth?: number;
+		showFolder?: boolean;
 		/** Every folder name, for "Move to folder". */
 		folders: string[];
 		onEdit: (c: ConnectionConfig) => void;
@@ -30,6 +31,7 @@
 	let {
 		connection,
 		depth = 0,
+		showFolder = false,
 		folders,
 		onEdit,
 		onDelete,
@@ -130,7 +132,7 @@
 <ContextMenu.Root>
 	<ContextMenu.Trigger>
 		{#snippet child({ props })}
-			<div class="relative">
+			<div class="relative shrink-0">
 				{#if dropTarget}
 					<div
 						class="pointer-events-none absolute inset-x-1 -top-px z-10 h-0.5 rounded-full bg-signal"
@@ -138,6 +140,7 @@
 				{/if}
 				<TreeRow
 					{...props}
+					data-connection-id={connection.id}
 					{depth}
 					{expanded}
 					loading={status === 'connecting'}
@@ -154,7 +157,7 @@
 					{#snippet icon()}
 						<span class="relative">
 							<ServerIcon
-								class="size-3.5"
+								class="size-4"
 								style={connection.color ? `color: ${connection.color}` : ''}
 							/>
 							{#if status === 'connected'}
@@ -169,6 +172,12 @@
 						</span>
 					{/snippet}
 					{#snippet trailing()}
+						{#if showFolder && connection.folder}
+							<span
+								class="max-w-24 truncate text-xs text-muted-foreground"
+								title="Folder: {connection.folder}">{connection.folder}</span
+							>
+						{/if}
 						{#if connection.readOnly}
 							<LockIcon class="size-3 text-muted-foreground" />
 						{/if}

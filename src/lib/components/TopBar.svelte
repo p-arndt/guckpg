@@ -16,7 +16,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import LockIcon from '@lucide/svelte/icons/lock';
 	import { toast } from 'svelte-sonner';
-	import { errorMessage } from '#lib/api.js';
+	import { errorMessage, type ConnectionConfig } from '#lib/api.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -42,20 +42,41 @@
 		'__TAURI_INTERNALS__' in window &&
 		/Mac/.test(navigator.userAgent);
 
-	/** The connection and database the toolbar acts on: the active tab's, otherwise the first connected one. */
-	const context = $derived.by(() => {
+	const connected = $derived(
+		connections.list.filter((c) => connections.status[c.id] === 'connected')
+	);
+
+	/**
+	 * The connection the bar names: the active tab's, otherwise the first connected one.
+	 * It can be idle (the tab's connection was closed); the bar then says so.
+	 */
+	const shown = $derived.by(() => {
 		const tab = tabs.active;
-		if (tab) {
-			const connection = connections.get(tab.connectionId);
-			return connection ? { connection, database: tab.database } : null;
-		}
-		const connection = connections.list.find((c) => connections.status[c.id] === 'connected');
+		const connection = (tab && connections.get(tab.connectionId)) || connected[0];
 		if (!connection) return null;
-		return {
-			connection,
-			database: connections.info[connection.id]?.database ?? connection.database
-		};
+		const database =
+			tab && tab.connectionId === connection.id
+				? tab.database
+				: (connections.info[connection.id]?.database ?? connection.database);
+		return { connection, database, connected: connections.status[connection.id] === 'connected' };
 	});
+
+	/** What the menu acts on: the shown connection, only while it is connected. */
+	const context = $derived(shown?.connected ? shown : null);
+
+	/** Other open connections, reachable through the "+N" chip. */
+	const others = $derived(connected.filter((c) => c.id !== shown?.connection.id));
+
+	/** Focus an open tab of that connection, or open a query tab on it. */
+	function switchTo(connection: ConnectionConfig) {
+		const existing = tabs.items.find((t) => t.connectionId === connection.id);
+		if (existing) tabs.activeId = existing.id;
+		else
+			tabs.openQuery(
+				connection.id,
+				connections.info[connection.id]?.database ?? connection.database
+			);
+	}
 
 	/** Schemas of the context database, loaded when the menu opens; null while loading. */
 	let backupOpen = $state(false);
@@ -179,8 +200,47 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 			{#if context.connection.readOnly}
 				<span class="chip"><LockIcon class="size-3" />read-only</span>
 			{/if}
+		{:else if shown}
+			<span class="flex min-w-0 items-center gap-2 px-2 text-muted-foreground">
+				<ServerIcon class="size-3.5 shrink-0" />
+				<span class="truncate">{shown.connection.name}</span>
+				<span class="chip shrink-0">disconnected</span>
+			</span>
 		{:else}
 			<span class="text-muted-foreground">Not connected</span>
+		{/if}
+		{#if others.length}
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							type="button"
+							class="chip shrink-0 hover:bg-hover data-[state=open]:bg-hover"
+							title="Other connected connections"
+						>
+							+{others.length}
+						</button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="start" class="w-56">
+					<DropdownMenu.Label class="text-xs font-normal text-muted-foreground">
+						Connected
+					</DropdownMenu.Label>
+					{#each connected as connection (connection.id)}
+						<DropdownMenu.Item onSelect={() => switchTo(connection)}>
+							<ServerIcon
+								class="size-3.5 shrink-0"
+								style={connection.color ? `color: ${connection.color}` : ''}
+							/>
+							<span class="truncate">{connection.name}</span>
+							{#if connection.id === shown?.connection.id}
+								<span class="ml-auto text-xs text-muted-foreground">current</span>
+							{/if}
+						</DropdownMenu.Item>
+					{/each}
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
 		{/if}
 	</div>
 

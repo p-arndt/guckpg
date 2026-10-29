@@ -178,10 +178,43 @@ pub struct SortBy {
     pub dir: SortDir,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilterOp {
+    /// Case-insensitive substring.
+    Contains,
+    StartsWith,
+    EndsWith,
+    Eq,
+    Ne,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    IsNull,
+    IsNotNull,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub enum Connector {
+    #[default]
+    #[serde(rename = "AND")]
+    And,
+    #[serde(rename = "OR")]
+    Or,
+}
+
+/// One condition of the table filter. `connector` joins it to the conditions
+/// before it and is ignored on the first one.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BrowseFilter {
     pub column: String,
-    pub value: String,
+    pub op: FilterOp,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub connector: Connector,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -192,7 +225,7 @@ pub struct BrowseRequest {
     #[serde(default)]
     pub sort: Option<SortBy>,
     #[serde(default)]
-    pub filter: Option<BrowseFilter>,
+    pub filters: Vec<BrowseFilter>,
     pub limit: u32,
     pub offset: u64,
 }
@@ -210,14 +243,74 @@ pub enum RowOrder {
     Unknown,
 }
 
-pub fn browse_sql(req: &BrowseRequest, order: &RowOrder) -> String {
+/// Escape LIKE wildcards and the escape character itself.
+fn like_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+/// One predicate. Comparisons use `col op 'literal'`, so Postgres coerces the
+/// unknown-typed literal to the column type (numbers compare as numbers).
+fn filter_predicate(filter: &BrowseFilter) -> AppResult<String> {
+    let column = quote_ident(&filter.column);
+    let value = || {
+        filter.value.as_deref().ok_or_else(|| {
+            AppError::msg(format!(
+                "The filter on \"{}\" needs a value.",
+                filter.column
+            ))
+        })
+    };
+    let pattern = |prefix: &str, suffix: &str| -> AppResult<String> {
+        Ok(format!(
+            "{column}::text ILIKE {}",
+            quote_literal(&format!("{prefix}{}{suffix}", like_escape(value()?)))
+        ))
+    };
+    let compare = |op: &str| -> AppResult<String> {
+        Ok(format!("{column} {op} {}", quote_literal(value()?)))
+    };
+    match filter.op {
+        FilterOp::Contains => pattern("%", "%"),
+        FilterOp::StartsWith => pattern("", "%"),
+        FilterOp::EndsWith => pattern("%", ""),
+        FilterOp::Eq => compare("="),
+        FilterOp::Ne => compare("<>"),
+        FilterOp::Lt => compare("<"),
+        FilterOp::Lte => compare("<="),
+        FilterOp::Gt => compare(">"),
+        FilterOp::Gte => compare(">="),
+        FilterOp::IsNull => Ok(format!("{column} IS NULL")),
+        FilterOp::IsNotNull => Ok(format!("{column} IS NOT NULL")),
+    }
+}
+
+/// The WHERE condition. Conditions fold strictly left to right, so the
+/// parentheses make `a OR b AND c` mean `((a OR b) AND c)`, as in Navicat.
+fn where_condition(filters: &[BrowseFilter]) -> AppResult<Option<String>> {
+    let mut condition: Option<String> = None;
+    for filter in filters {
+        let predicate = filter_predicate(filter)?;
+        condition = Some(match condition {
+            None => predicate,
+            Some(left) => {
+                let connector = match filter.connector {
+                    Connector::And => "AND",
+                    Connector::Or => "OR",
+                };
+                format!("({left} {connector} {predicate})")
+            }
+        });
+    }
+    Ok(condition)
+}
+
+pub fn browse_sql(req: &BrowseRequest, order: &RowOrder) -> AppResult<String> {
     let mut sql = format!("SELECT * FROM {}", qualified(&req.schema, &req.table));
-    if let Some(filter) = &req.filter {
-        sql.push_str(&format!(
-            " WHERE strpos(lower({}::text), lower({})) > 0",
-            quote_ident(&filter.column),
-            quote_literal(&filter.value)
-        ));
+    if let Some(condition) = where_condition(&req.filters)? {
+        sql.push_str(&format!(" WHERE {condition}"));
     }
     let mut terms = Vec::new();
     if let Some(sort) = &req.sort {
@@ -246,7 +339,7 @@ pub fn browse_sql(req: &BrowseRequest, order: &RowOrder) -> String {
         sql.push_str(&format!(" ORDER BY {}", terms.join(", ")));
     }
     sql.push_str(&format!(" LIMIT {} OFFSET {}", req.limit, req.offset));
-    sql
+    Ok(sql)
 }
 
 #[cfg(test)]
@@ -356,22 +449,22 @@ mod tests {
             schema: "public".into(),
             table: "users".into(),
             sort: None,
-            filter: None,
+            filters: Vec::new(),
             limit: 100,
             offset: 200,
         };
         assert_eq!(
-            browse_sql(&req, &RowOrder::Unknown),
+            browse_sql(&req, &RowOrder::Unknown).unwrap(),
             r#"SELECT * FROM "public"."users" LIMIT 100 OFFSET 200"#
         );
         // Without a sort, an unkeyed heap is not sorted: that would scan the
         // whole table for every page.
         assert_eq!(
-            browse_sql(&req, &RowOrder::Physical),
+            browse_sql(&req, &RowOrder::Physical).unwrap(),
             r#"SELECT * FROM "public"."users" LIMIT 100 OFFSET 200"#
         );
         assert_eq!(
-            browse_sql(&req, &RowOrder::Key(vec!["tenant".into(), "i\"d".into()])),
+            browse_sql(&req, &RowOrder::Key(vec!["tenant".into(), "i\"d".into()])).unwrap(),
             r#"SELECT * FROM "public"."users" ORDER BY "tenant", "i""d" LIMIT 100 OFFSET 200"#
         );
     }
@@ -383,7 +476,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            browse_sql(&req, &RowOrder::Unknown),
+            browse_sql(&req, &RowOrder::Unknown).unwrap(),
             r#"SELECT * FROM "app"."Order" ORDER BY "created_at" DESC LIMIT 50 OFFSET 0"#
         );
     }
@@ -395,29 +488,94 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            browse_sql(&req, &RowOrder::Key(vec!["id".into()])),
+            browse_sql(&req, &RowOrder::Key(vec!["id".into()])).unwrap(),
             r#"SELECT * FROM "app"."t" ORDER BY "name" ASC, "id" LIMIT 50 OFFSET 50"#
         );
         assert_eq!(
-            browse_sql(&req, &RowOrder::Physical),
+            browse_sql(&req, &RowOrder::Physical).unwrap(),
             r#"SELECT * FROM "app"."t" ORDER BY "name" ASC, tableoid, ctid LIMIT 50 OFFSET 50"#
         );
         // Sorting by a key column does not repeat it.
         assert_eq!(
-            browse_sql(&req, &RowOrder::Key(vec!["name".into(), "id".into()])),
+            browse_sql(&req, &RowOrder::Key(vec!["name".into(), "id".into()])).unwrap(),
             r#"SELECT * FROM "app"."t" ORDER BY "name" ASC, "id" LIMIT 50 OFFSET 50"#
         );
     }
 
     #[test]
-    fn browse_filter_quotes_identifiers_and_literal_without_wildcards() {
+    fn browse_filter_quotes_identifiers_and_escapes_like_wildcards() {
         let req: BrowseRequest = serde_json::from_str(
-            r#"{"schema":"public","table":"users","filter":{"column":"name\"x","value":"a'%_\\b"},"limit":10,"offset":0}"#,
+            r#"{"schema":"public","table":"users","filters":[{"column":"name\"x","op":"contains","value":"a'%_\\b"}],"limit":10,"offset":0}"#,
         ).unwrap();
         assert_eq!(
-            browse_sql(&req, &RowOrder::Unknown),
-            r#"SELECT * FROM "public"."users" WHERE strpos(lower("name""x"::text), lower(E'a''%_\\b')) > 0 LIMIT 10 OFFSET 0"#
+            browse_sql(&req, &RowOrder::Unknown).unwrap(),
+            r#"SELECT * FROM "public"."users" WHERE "name""x"::text ILIKE E'%a''\\%\\_\\\\b%' LIMIT 10 OFFSET 0"#
         );
+    }
+
+    #[test]
+    fn browse_filter_operators() {
+        let sql = |filter: &str| {
+            let req: BrowseRequest = serde_json::from_str(&format!(
+                r#"{{"schema":"public","table":"t","filters":[{filter}],"limit":5,"offset":0}}"#
+            ))
+            .unwrap();
+            browse_sql(&req, &RowOrder::Unknown).unwrap()
+        };
+        let select =
+            |where_: &str| format!(r#"SELECT * FROM "public"."t" WHERE {where_} LIMIT 5 OFFSET 0"#);
+        let compare = |op: &str, value: &str| {
+            sql(&format!(
+                r#"{{"column":"c","op":"{op}","value":"{value}"}}"#
+            ))
+        };
+        assert_eq!(
+            compare("startsWith", "ab"),
+            select(r#""c"::text ILIKE 'ab%'"#)
+        );
+        assert_eq!(
+            compare("endsWith", "ab"),
+            select(r#""c"::text ILIKE '%ab'"#)
+        );
+        assert_eq!(compare("eq", "7"), select(r#""c" = '7'"#));
+        assert_eq!(compare("ne", "7"), select(r#""c" <> '7'"#));
+        assert_eq!(compare("lt", "7"), select(r#""c" < '7'"#));
+        assert_eq!(compare("lte", "7"), select(r#""c" <= '7'"#));
+        assert_eq!(compare("gt", "7"), select(r#""c" > '7'"#));
+        assert_eq!(compare("gte", "7"), select(r#""c" >= '7'"#));
+        assert_eq!(
+            sql(r#"{"column":"c","op":"isNull"}"#),
+            select(r#""c" IS NULL"#)
+        );
+        assert_eq!(
+            sql(r#"{"column":"c","op":"isNotNull"}"#),
+            select(r#""c" IS NOT NULL"#)
+        );
+    }
+
+    #[test]
+    fn browse_filters_fold_left_to_right_with_connectors() {
+        let req: BrowseRequest = serde_json::from_str(
+            r#"{"schema":"public","table":"t","filters":[
+                {"column":"a","op":"eq","value":"1","connector":"AND"},
+                {"column":"b","op":"isNull","connector":"OR"},
+                {"column":"c","op":"contains","value":"x","connector":"AND"}
+            ],"limit":5,"offset":0}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            browse_sql(&req, &RowOrder::Unknown).unwrap(),
+            r#"SELECT * FROM "public"."t" WHERE (("a" = '1' OR "b" IS NULL) AND "c"::text ILIKE '%x%') LIMIT 5 OFFSET 0"#
+        );
+    }
+
+    #[test]
+    fn browse_filter_without_value_is_an_error() {
+        let req: BrowseRequest = serde_json::from_str(
+            r#"{"schema":"public","table":"t","filters":[{"column":"c","op":"eq"}],"limit":5,"offset":0}"#,
+        )
+        .unwrap();
+        assert!(browse_sql(&req, &RowOrder::Unknown).is_err());
     }
 
     #[test]

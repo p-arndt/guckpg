@@ -30,7 +30,7 @@ it('offers editing directly in the open view', async () => {
 		structureDirty: 0,
 		offset: 0,
 		limit: 200,
-		filter: null,
+		filters: [],
 		sort: null,
 		open: vi.fn(),
 		lastSql: '',

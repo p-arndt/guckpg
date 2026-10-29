@@ -143,9 +143,13 @@
 					data-connection-id={connection.id}
 					{depth}
 					{expanded}
+					showChevron={false}
 					loading={status === 'connecting'}
 					label={connection.name}
-					onclick={toggle}
+					onclick={(e) => {
+						if (e.detail === 0) void toggle();
+					}}
+					ondblclick={toggle}
 					draggable="true"
 					ondragstart={onDragStart}
 					ondragend={() => (sidebar.dragging = null)}
@@ -241,11 +245,6 @@
 {#if expanded}
 	<RolesNode connectionId={connection.id} readOnly={connection.readOnly} depth={depth + 1} />
 	{#each ordered as database (database)}
-		<DatabaseNode
-			connectionId={connection.id}
-			{database}
-			depth={depth + 1}
-			initiallyExpanded={database === connection.database}
-		/>
+		<DatabaseNode connectionId={connection.id} {database} depth={depth + 1} />
 	{/each}
 {/if}

@@ -10,6 +10,7 @@
 		/** undefined for leaves */
 		expanded?: boolean;
 		loading?: boolean;
+		showChevron?: boolean;
 		icon?: Snippet;
 		trailing?: Snippet;
 		label: string;
@@ -19,6 +20,7 @@
 		depth,
 		expanded,
 		loading = false,
+		showChevron = true,
 		icon,
 		trailing,
 		label,
@@ -39,9 +41,10 @@
 		'group flex h-[26px] w-full shrink-0 items-center gap-1.5 rounded-lg pr-2 text-left text-[13px] text-ink-2 transition-[background-color,color] duration-(--dur-micro) hover:bg-hover hover:text-foreground data-[state=open]:bg-hover data-[state=open]:text-foreground',
 		className
 	)}
-	style:padding-left="{depth * 10 + (expanded !== undefined || loading ? 4 : 22)}px"
+	style:padding-left="{depth * 10 +
+		(loading || (showChevron && expanded !== undefined) ? 4 : 22)}px"
 >
-	{#if expanded !== undefined || loading}
+	{#if loading || (showChevron && expanded !== undefined)}
 		<span class="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
 			{#if loading}
 				<LoaderIcon class="size-3.5 animate-spin" />

@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { connections, newConnection } from '#lib/state/connections.svelte.js';
 import { sidebar } from '#lib/state/sidebar.svelte.js';
 
-vi.mock('#lib/state/catalog.js', () => ({ catalog: { databases: vi.fn().mockResolvedValue([]) } }));
+vi.mock('#lib/state/catalog.js', () => ({
+	catalog: {
+		databases: vi.fn().mockResolvedValue(['postgres']),
+		schemas: vi.fn().mockResolvedValue([])
+	}
+}));
 import Sidebar from './Sidebar.svelte';
 
 describe('connected connections', () => {
@@ -23,8 +28,16 @@ describe('connected connections', () => {
 		expect(nodes.filter((node) => node.getAttribute('data-connection-id') === 'one')).toHaveLength(
 			1
 		);
-		await fireEvent.click(nodes[0]);
+		await fireEvent.click(nodes[0], { detail: 1 });
+		expect(sidebar.isOpen('one')).toBe(false);
+		await fireEvent.dblClick(nodes[0]);
 		expect(sidebar.isOpen('one')).toBe(true);
+		const database = await screen.findByRole('treeitem', { name: 'postgres' });
+		expect(database.getAttribute('aria-expanded')).toBe('false');
+		await fireEvent.click(database);
+		expect(database.getAttribute('aria-expanded')).toBe('true');
+		await fireEvent.click(nodes[0], { detail: 0 });
+		expect(sidebar.isOpen('one')).toBe(false);
 		await fireEvent.input(screen.getByRole('textbox', { name: 'Filter connections' }), {
 			target: { value: 'Development' }
 		});

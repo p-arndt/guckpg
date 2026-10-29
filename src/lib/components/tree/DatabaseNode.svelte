@@ -13,13 +13,11 @@
 		connectionId: string;
 		database: string;
 		depth: number;
-		initiallyExpanded?: boolean;
 	}
 
-	let { connectionId, database, depth, initiallyExpanded = false }: Props = $props();
+	let { connectionId, database, depth }: Props = $props();
 
-	// svelte-ignore state_referenced_locally
-	let expanded = $state(initiallyExpanded);
+	let expanded = $state(false);
 	let showSystem = $state(false);
 
 	let fresh = false;

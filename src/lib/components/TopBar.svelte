@@ -3,6 +3,7 @@
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import BackupDialog from './BackupDialog.svelte';
 	import AppearanceSettings from './AppearanceSettings.svelte';
+	import UpdateButton from './UpdateButton.svelte';
 	import SchemaCompare from './SchemaCompare.svelte';
 	import SessionMonitor from './SessionMonitor.svelte';
 	import BotIcon from '@lucide/svelte/icons/bot';
@@ -280,6 +281,7 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 			</Tooltip.Trigger>
 			<Tooltip.Content>AI assistant</Tooltip.Content>
 		</Tooltip.Root>
+		<UpdateButton />
 		<AppearanceSettings />
 	</div>
 </header>

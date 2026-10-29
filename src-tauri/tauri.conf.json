@@ -22,7 +22,10 @@
         "dragDropEnabled": false,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 16, "y": 27 }
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 27
+        }
       }
     ],
     "security": {
@@ -44,5 +47,13 @@
     },
     "category": "DeveloperTool",
     "shortDescription": "Postgres client"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY1QkRERDA5RTIxMjFFQTYKUldTbUhoTGlDZDI5WlNBcEYwMHAvRU5wUEMyTnR1L3o0MkV6UVNVTjVnYzhGZVJJQXJFcFcvUWcK",
+      "endpoints": [
+        "https://github.com/p-arndt/guckpg/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

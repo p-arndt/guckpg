@@ -25,7 +25,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo fmt --all --check
-      - run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 
   # The reusable rust-ci workflow runs without a database, so the integration
   # tests would only ever skip there. This job runs them against the same

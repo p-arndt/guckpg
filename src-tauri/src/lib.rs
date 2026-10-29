@@ -30,7 +30,10 @@ pub fn run() {
     // installed it first. Fails only if one is already installed.
     let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
                     .level(if cfg!(debug_assertions) {

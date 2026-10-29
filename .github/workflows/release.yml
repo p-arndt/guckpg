@@ -15,49 +15,20 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  release:
-    needs: [ci, build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - name: Verify version and read release notes
-        id: stamp
-        uses: p-arndt/stamp@f4b7acfb14f4ebe4b592b60d13b90c954474df7e # v0.5.0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: installers-*
-          path: release-assets
-          merge-multiple: true
-      # Installers are attached in the same step, so the release never goes public without them.
-      - name: Publish release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          draft: false
-          prerelease: ${{ steps.stamp.outputs.prerelease }}
-          body_path: ${{ steps.stamp.outputs.notes-file }}
-          files: release-assets/*
-          fail_on_unmatched_files: true
-
   build:
     permissions:
-      contents: read
+      contents: write
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - os: macos-26
             target: aarch64-apple-darwin
-            python: python3
           - os: macos-26
             target: x86_64-apple-darwin
-            python: python3
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            python: python
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,16 +43,37 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - run: pnpm install --frozen-lockfile
-      - name: Build installers
+      - name: Check signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node -e "if (!process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('Missing updater signing key')"
+      - name: Build and upload signed installers
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          args: --target ${{ matrix.target }}
-      - name: Collect installers
-        run: ${{ matrix.python }} .github/scripts/collect-release-assets.py ${{ matrix.target }} release-assets
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseDraft: true
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+
+  release:
+    needs: [ci, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: installers-${{ matrix.target }}
-          path: release-assets/*
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 1
+          fetch-depth: 0
+      - name: Verify version and read release notes
+        id: stamp
+        uses: p-arndt/stamp@f4b7acfb14f4ebe4b592b60d13b90c954474df7e # v0.5.0
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ steps.stamp.outputs.notes-file }}
+          PRERELEASE: ${{ steps.stamp.outputs.prerelease }}
+        run: gh release edit "$GITHUB_REF_NAME" --notes-file "$RELEASE_NOTES" --prerelease="$PRERELEASE" --draft=false

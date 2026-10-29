@@ -1,5 +1,6 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { hostKeyPrompt } from './state/host-key.svelte.js';
+import type { FilterCondition } from './table-filter.js';
 
 export type SslMode = 'disable' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
 
@@ -232,7 +233,7 @@ export interface BrowseRequest {
 	schema: string;
 	table: string;
 	sort: { column: string; dir: 'asc' | 'desc' } | null;
-	filter?: { column: string; value: string } | null;
+	filters: FilterCondition[];
 	limit: number;
 	offset: number;
 }

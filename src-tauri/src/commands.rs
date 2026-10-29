@@ -282,7 +282,7 @@ pub async fn browse_table(
         let meta = manager.meta(&id, &database).await?;
         editing::row_order(&meta.client, &request.schema, &request.table).await?
     };
-    let sql = browse_sql(&request, &order);
+    let sql = browse_sql(&request, &order)?;
     let conn = manager.tab(&tab_id, &id, &database).await?;
     let output = conn.run_editable(&sql, request.limit as usize).await?;
     Ok(BrowseOutput { sql, output })

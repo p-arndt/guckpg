@@ -6,11 +6,14 @@
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import XIcon from '@lucide/svelte/icons/x';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
 	import { errorMessage } from '#lib/api.js';
 	import { formatCount, formatDuration } from '#lib/format.js';
+	import { FILTER_OPERATORS, takesValue, type FilterCondition } from '#lib/table-filter.js';
 	import { tabs, type TableTab } from '#lib/state/tabs.svelte.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { confirmDiscard } from '#lib/state/confirm.svelte.js';
@@ -29,11 +32,26 @@
 	const connection = $derived(connections.get(tab.connectionId));
 	const columnTypes = $derived(Object.fromEntries(tab.columns.map((c) => [c.name, c.dataType])));
 	const primaryKeys = $derived(tab.columns.filter((c) => c.primaryKey).map((c) => c.name));
+	// The result carries column names too, so the filter works before the column list arrives.
+	const filterColumns = $derived(
+		tab.columns.length ? tab.columns.map((c) => c.name) : (result?.columns ?? [])
+	);
+
+	type Draft = FilterCondition & { id: string };
+	const blankDraft = (): Draft => ({
+		id: crypto.randomUUID(),
+		column: '',
+		op: 'contains',
+		value: '',
+		connector: 'AND'
+	});
+	// svelte-ignore state_referenced_locally
+	let drafts = $state<Draft[]>(
+		tab.filters.length
+			? tab.filters.map((f) => ({ ...f, id: crypto.randomUUID() }))
+			: [blankDraft()]
+	);
 	let testDataOpen = $state(false);
-	// svelte-ignore state_referenced_locally
-	let filterColumn = $state(tab.filter?.column ?? '');
-	// svelte-ignore state_referenced_locally
-	let filterValue = $state(tab.filter?.value ?? '');
 	let designerOpened = $state(false);
 	$effect(() => {
 		if (tab.view === 'structure') designerOpened = true;
@@ -47,14 +65,24 @@
 	}
 
 	function applyFilter() {
-		void guarded(() => void tab.applyFilter({ column: filterColumn, value: filterValue }));
+		const filters = drafts.map(({ column, op, value, connector }) => ({
+			column,
+			op,
+			value,
+			connector
+		}));
+		void guarded(() => void tab.applyFilter(filters));
+	}
+
+	function clearFilter() {
+		drafts = [blankDraft()];
+		void guarded(() => void tab.applyFilter([]));
 	}
 
 	const load = () => tab.load();
 
 	function structureApplied(name: string) {
-		filterColumn = '';
-		filterValue = '';
+		drafts = [blankDraft()];
 		void tab.structureApplied(name);
 	}
 </script>
@@ -167,46 +195,87 @@
 		</div>
 
 		<form
-			class="flex shrink-0 items-center gap-2 border-b px-3 py-1"
+			class="flex shrink-0 flex-col gap-1 border-b px-3 py-1.5"
 			onsubmit={(event) => {
 				event.preventDefault();
 				applyFilter();
 			}}
 		>
-			<label for="filter-column-{tab.id}" class="text-xs text-muted-foreground">Filter</label>
-			<select
-				id="filter-column-{tab.id}"
-				class="h-8 max-w-44 rounded-md border bg-background px-2 text-sm"
-				bind:value={filterColumn}
-				disabled={tab.running}
-			>
-				<option value="">Choose column</option>
-				{#each tab.columns as column (column.name)}<option value={column.name}>{column.name}</option
-					>{/each}
-			</select>
-			<Input
-				class="h-8 max-w-64"
-				aria-label="Filter text"
-				placeholder="Contains (case insensitive)"
-				bind:value={filterValue}
-				disabled={tab.running}
-			/>
-			<Button
-				size="sm"
-				variant="outline"
-				type="submit"
-				disabled={tab.running || (!filterColumn && !!filterValue)}>Apply</Button
-			>
-			{#if tab.filter}<Button
+			{#each drafts as draft, i (draft.id)}
+				<div class="flex items-center gap-2">
+					<span class="w-10 shrink-0 text-xs text-muted-foreground">{i === 0 ? 'Where' : ''}</span>
+					{#if i > 0}
+						<button
+							type="button"
+							class="measured h-7 w-12 shrink-0 rounded-md border text-[11px] text-cool hover:bg-hover disabled:opacity-50"
+							title="Switch between AND and OR"
+							disabled={tab.running}
+							onclick={() => (draft.connector = draft.connector === 'AND' ? 'OR' : 'AND')}
+							>{draft.connector.toLowerCase()}</button
+						>
+					{/if}
+					<select
+						class="h-8 max-w-44 rounded-md border bg-background px-2 text-sm"
+						aria-label="Filter column"
+						bind:value={draft.column}
+						disabled={tab.running}
+					>
+						<option value="">Choose column</option>
+						{#each filterColumns as name (name)}<option value={name}>{name}</option>{/each}
+					</select>
+					<select
+						class="h-8 rounded-md border bg-background px-2 text-sm"
+						aria-label="Filter operator"
+						bind:value={draft.op}
+						disabled={tab.running}
+					>
+						{#each FILTER_OPERATORS as operator (operator.value)}
+							<option value={operator.value}>{operator.label}</option>
+						{/each}
+					</select>
+					{#if takesValue(draft.op)}
+						<Input
+							class="h-8 max-w-64"
+							aria-label="Filter value"
+							placeholder="value"
+							bind:value={draft.value}
+							disabled={tab.running}
+						/>
+					{/if}
+					<Button
+						size="icon-sm"
+						variant="ghost"
+						type="button"
+						title="Remove condition"
+						aria-label="Remove condition"
+						disabled={tab.running}
+						onclick={() => drafts.splice(i, 1)}
+					>
+						<XIcon />
+					</Button>
+				</div>
+			{/each}
+			<div class="flex items-center gap-2">
+				<Button
 					size="sm"
 					variant="ghost"
 					type="button"
 					disabled={tab.running}
-					onclick={() => {
-						filterValue = '';
-						applyFilter();
-					}}>Clear</Button
-				>{/if}
+					onclick={() => drafts.push(blankDraft())}
+				>
+					<PlusIcon /> Add condition
+				</Button>
+				<Button size="sm" variant="outline" type="submit" disabled={tab.running}>Apply</Button>
+				{#if tab.filters.length}
+					<Button
+						size="sm"
+						variant="ghost"
+						type="button"
+						disabled={tab.running}
+						onclick={clearFilter}>Clear</Button
+					>
+				{/if}
+			</div>
 		</form>
 		<div class="min-h-0 flex-1">
 			{#if tab.error}

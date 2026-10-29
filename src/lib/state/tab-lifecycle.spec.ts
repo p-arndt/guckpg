@@ -45,7 +45,10 @@ describe('TableTab', () => {
 	it('loads a page with the current sort, filter and paging', async () => {
 		const tab = new Tabs().openTable('c1', 'db', 'public', 'users');
 		invoke.mockResolvedValue(page('SELECT 1'));
-		await tab.applyFilter({ column: 'name', value: 'ann' });
+		await tab.applyFilter([
+			{ column: 'name', op: 'contains', value: 'ann', connector: 'AND' },
+			{ column: 'age', op: 'isNull', connector: 'OR' }
+		]);
 		await tab.sortBy('id');
 		await tab.page(1);
 		const [, args] = invoke.mock.calls.at(-1)!;
@@ -53,7 +56,10 @@ describe('TableTab', () => {
 			schema: 'public',
 			table: 'users',
 			sort: { column: 'id', dir: 'asc' },
-			filter: { column: 'name', value: 'ann' },
+			filters: [
+				{ column: 'name', op: 'contains', value: 'ann', connector: 'AND' },
+				{ column: 'age', op: 'isNull', connector: 'OR' }
+			],
 			limit: 200,
 			offset: 200
 		});
@@ -73,14 +79,50 @@ describe('TableTab', () => {
 		expect(tab.sort).toBeNull();
 	});
 
-	it('drops an incomplete filter and resets the page size offset', async () => {
+	it('drops incomplete conditions and resets the page size offset', async () => {
 		const tab = new Tabs().openTable('c1', 'db', 'public', 'users');
 		invoke.mockResolvedValue(page('x'));
-		await tab.applyFilter({ column: 'name', value: '' });
-		expect(tab.filter).toBeNull();
+		await tab.applyFilter([
+			{ column: 'name', op: 'contains', value: '', connector: 'AND' },
+			{ column: '', op: 'eq', value: '1', connector: 'AND' }
+		]);
+		expect(tab.filters).toEqual([]);
 		tab.offset = 200;
 		await tab.setLimit(500);
 		expect([tab.limit, tab.offset]).toEqual([500, 0]);
+	});
+
+	it('fetches missing columns on open, even when the page is already loaded', async () => {
+		const tab = new Tabs().openTable('c1', 'db', 'public', 'users');
+		tab.output = { results: [], elapsedMs: 1 };
+		invoke.mockImplementation((cmd: string) =>
+			Promise.resolve(
+				cmd === 'list_columns'
+					? [{ name: 'id', dataType: 'int4', notNull: true, default: null, primaryKey: true }]
+					: undefined
+			)
+		);
+		await tab.open();
+		await vi.waitFor(() => expect(tab.columns.map((c) => c.name)).toEqual(['id']));
+		expect(invoke).not.toHaveBeenCalledWith('browse_table', expect.anything());
+	});
+
+	it('retries the columns on the next open after a failed fetch', async () => {
+		const tab = new Tabs().openTable('c1', 'db', 'public', 'users');
+		invoke.mockImplementation((cmd: string) =>
+			cmd === 'list_columns' ? Promise.reject(new Error('offline')) : Promise.resolve(page('x'))
+		);
+		await tab.open();
+		await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('list_columns', expect.anything()));
+		invoke.mockImplementation((cmd: string) =>
+			Promise.resolve(
+				cmd === 'list_columns'
+					? [{ name: 'id', dataType: 'int4', notNull: true, default: null, primaryKey: true }]
+					: page('x')
+			)
+		);
+		await tab.open();
+		await vi.waitFor(() => expect(tab.columns).toHaveLength(1));
 	});
 
 	it('keeps the newest page when an older load answers last', async () => {
@@ -170,7 +212,7 @@ describe('TableTab', () => {
 	it('starts over on the renamed table after the designer applied', async () => {
 		const tab = new Tabs().openTable('c1', 'db', 'sales', 'orders');
 		tab.sort = { column: 'id', dir: 'asc' };
-		tab.filter = { column: 'id', value: '1' };
+		tab.filters = [{ column: 'id', op: 'eq', value: '1', connector: 'AND' }];
 		tab.offset = 200;
 		tab.setStructureDirty(4);
 		invoke.mockImplementation((cmd: string) =>
@@ -179,7 +221,7 @@ describe('TableTab', () => {
 		const revision = connections.revision.c1 ?? 0;
 		await tab.structureApplied('order_items');
 		expect(tab.title).toBe('sales.order_items');
-		expect([tab.sort, tab.filter, tab.offset, tab.dirty]).toEqual([null, null, 0, 0]);
+		expect([tab.sort, tab.filters, tab.offset, tab.dirty]).toEqual([null, [], 0, 0]);
 		expect(connections.revision.c1).toBe(revision + 1);
 		expect(tab.lastSql).toBe('renamed');
 	});

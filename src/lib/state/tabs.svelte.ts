@@ -3,8 +3,7 @@ import { cycleSort, type Sort } from '#lib/grid.js';
 import { confirmDiscard } from './confirm.svelte.js';
 import { connections } from './connections.svelte.js';
 import type { BuilderModel } from '#lib/query-builder.js';
-
-export type TableFilter = { column: string; value: string };
+import { isComplete, type FilterCondition } from '#lib/table-filter.js';
 
 /**
  * Tabs are classes rather than plain objects so `output` can be raw state:
@@ -131,7 +130,7 @@ export class TableTab extends TabBase {
 	view = $state<'data' | 'structure'>('data');
 	structureBusy = $state(false);
 	sort = $state<Sort | null>(null);
-	filter = $state<TableFilter | null>(null);
+	filters = $state<FilterCondition[]>([]);
 	limit = $state(200);
 	offset = $state(0);
 	columns = $state.raw<Column[]>([]);
@@ -170,7 +169,7 @@ export class TableTab extends TabBase {
 				schema: this.schema,
 				table: this.table,
 				sort: this.sort,
-				filter: this.filter,
+				filters: this.filters,
 				limit: this.limit,
 				offset: this.offset
 			})
@@ -191,14 +190,18 @@ export class TableTab extends TabBase {
 		return loading;
 	}
 
-	/** Columns and the first page, unless already loaded. */
+	/**
+	 * Columns and the first page. Columns are fetched whenever they are missing,
+	 * even when the page is already loaded; a failed fetch is retried on the next open.
+	 */
 	open(): Promise<void> {
-		if (this.output) return Promise.resolve();
-		api
-			.listColumns(this.connectionId, this.database, this.schema, this.table)
-			.then((columns) => (this.columns = columns))
-			.catch(() => {});
-		return this.load();
+		if (!this.columns.length) {
+			api
+				.listColumns(this.connectionId, this.database, this.schema, this.table)
+				.then((columns) => (this.columns = columns))
+				.catch(() => {});
+		}
+		return this.output ? Promise.resolve() : this.load();
 	}
 
 	page(delta: number): Promise<void> {
@@ -218,8 +221,9 @@ export class TableTab extends TabBase {
 		return this.load();
 	}
 
-	applyFilter(filter: TableFilter | null): Promise<void> {
-		this.filter = filter && filter.column && filter.value ? filter : null;
+	/** Conditions without a column or a needed value are dropped, so a half-filled row is ignored. */
+	applyFilter(filters: FilterCondition[]): Promise<void> {
+		this.filters = filters.filter(isComplete);
 		this.offset = 0;
 		return this.load();
 	}
@@ -244,7 +248,7 @@ export class TableTab extends TabBase {
 		this.table = name;
 		this.title = this.schema === 'public' ? name : `${this.schema}.${name}`;
 		this.sort = null;
-		this.filter = null;
+		this.filters = [];
 		this.offset = 0;
 		this.output = null;
 		this.setStructureDirty(0);

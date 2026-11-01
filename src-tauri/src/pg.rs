@@ -276,7 +276,7 @@ pub fn pg_config(
         .port(cfg.port)
         .user(&cfg.user)
         .dbname(database)
-        .application_name("guckpg")
+        .application_name("pieg")
         .connect_timeout(CONNECT_TIMEOUT)
         .ssl_mode(match cfg.ssl_mode {
             SslMode::Disable => tokio_postgres::config::SslMode::Disable,

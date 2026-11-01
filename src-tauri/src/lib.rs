@@ -106,7 +106,7 @@ pub fn run() {
             roles::drop_role,
         ])
         .build(tauri::generate_context!())
-        .expect("error while running guckpg")
+        .expect("error while running pieg")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 let manager = app.state::<session::Manager>();

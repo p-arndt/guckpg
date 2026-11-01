@@ -29,7 +29,9 @@ describe('updates', () => {
 		relaunch.mockResolvedValue(undefined);
 		render(UpdateButton);
 		await fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }));
-		expect(await screen.findByText(/Version 1.2.3 is available/)).toBeTruthy();
+		expect(
+			await screen.findByText(/Version 1.2.3 is available. Installing it will restart pieg/)
+		).toBeTruthy();
 		expect(downloadAndInstall).not.toHaveBeenCalled();
 		await fireEvent.click(screen.getByRole('button', { name: 'Install and restart' }));
 		await waitFor(() => expect(relaunch).toHaveBeenCalledOnce());

@@ -242,7 +242,7 @@
 						<div class="flex w-full max-w-sm flex-col gap-5">
 							<div class="flex flex-col gap-1.5">
 								<h1 class="text-xl font-medium tracking-[-0.015em]">
-									{connections.list.length ? 'Nothing open yet' : 'Welcome to guckpg'}
+									{connections.list.length ? 'Nothing open yet' : 'Welcome to pieg'}
 								</h1>
 								<p class="text-ink-2">
 									{connections.list.length

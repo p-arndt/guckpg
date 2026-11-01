@@ -70,10 +70,10 @@
 					{#if busy}
 						{installed ? 'Restarting…' : update ? 'Installing update…' : 'Checking for updates…'}
 					{:else if installed}
-						The update is installed. Restart guckpg to finish updating.
+						The update is installed. Restart pieg to finish updating.
 					{:else if update}
-						Version {update.version} is available. Installing it will restart guckpg. Save any unsaved
-						changes and finish running queries first.
+						Version {update.version} is available. Installing it will restart pieg. Save any unsaved changes
+						and finish running queries first.
 					{:else}
 						{message || 'Could not check for updates.'}
 					{/if}

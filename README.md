@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="assets/guckpg-icon-transparent.png" alt="guckpg icon" width="180" />
+<img src="assets/pieg-icon-transparent.png" alt="pieg icon" width="180" />
 
-# guckpg
+# pieg
 
 **Your PostgreSQL database, in view.**
 
-_guck_ is German for “look” — _pg_ is short for PostgreSQL.
+A fresh view of PostgreSQL.
 
 Browse schemas, write queries, edit data and explore relationships — all from one desktop app.
 
@@ -71,6 +71,8 @@ Configure a model with function calling under **AI → Settings**:
 Choose **Schema only**, **Read data**, **Approve every action**, or **Read & write** in the AI panel. Writes require approval; read-only connections block them. Read data can run SQL automatically in a read-only transaction, but database functions may have external side effects.
 
 Credentials are stored in the OS keychain. Prompts, inspected schema and tool results are sent to the configured provider.
+
+The app was previously called **guckpg**. Its existing app identifier and storage keys are retained so saved connections, credentials and preferences remain available. GitHub links still point to the existing repository.
 
 ## Development
 

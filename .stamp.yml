@@ -1,4 +1,4 @@
-project: guckpg
+project: pieg
 version:
   - package.json#version
   - src-tauri/Cargo.toml#package.version

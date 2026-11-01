@@ -51,7 +51,7 @@ async fn load_key(
 }
 
 /// Paths of the known_hosts files we consult. The user's own file is read
-/// but never written; keys the user accepts in guckpg go to the app's file.
+/// but never written; keys the user accepts in pieg go to the app's file.
 #[derive(Debug, Clone)]
 pub struct KnownHosts {
     pub user_file: Option<PathBuf>,

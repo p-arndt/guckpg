@@ -1,5 +1,5 @@
 [package]
-name = "guckpg"
+name = "pieg"
 version = "0.4.0"
 description = "Postgres client for the desktop"
 authors = ["p-arndt"]
@@ -11,7 +11,7 @@ rust-version = "1.90"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "guckpg_lib"
+name = "pieg_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

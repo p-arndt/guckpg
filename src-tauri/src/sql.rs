@@ -1,4 +1,4 @@
-//! SQL text built by guckpg itself. Every identifier from the UI goes through
+//! SQL text built by pieg itself. Every identifier from the UI goes through
 //! `quote_ident`, so table or column names can never inject SQL.
 
 use std::future::Future;
@@ -34,7 +34,7 @@ pub fn literal_or_null(value: Option<&str>) -> String {
 }
 
 /// Postgres silently truncates identifiers longer than 63 bytes, which
-/// would make guckpg act on a different name than the user typed, and NUL
+/// would make pieg act on a different name than the user typed, and NUL
 /// cannot be sent at all.
 pub fn checked_ident(name: &str) -> AppResult<&str> {
     if name.is_empty() || name.len() > 63 || name.contains('\0') {

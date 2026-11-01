@@ -9,6 +9,7 @@ describe('sidebar toggle', () => {
 			sidebarOpen: true,
 			onToggleSidebar
 		});
+		expect(screen.getByText('pieg')).toBeTruthy();
 		const toggle = screen.getByRole('button', { name: 'Hide sidebar' });
 		expect(toggle.getAttribute('aria-expanded')).toBe('true');
 		await fireEvent.click(toggle);

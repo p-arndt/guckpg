@@ -134,7 +134,7 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 		title={`${sidebarOpen ? 'Hide' : 'Show'} sidebar (${shortcut('B')})`}
 		onclick={onToggleSidebar}><PanelLeftIcon /></Button
 	>
-	<span class="text-[15px] font-semibold tracking-[-0.02em]" data-tauri-drag-region>guckpg</span>
+	<span class="text-[15px] font-semibold tracking-[-0.02em]" data-tauri-drag-region>pieg</span>
 
 	<div class="flex min-w-0 flex-1 basis-0 items-center gap-2 text-sm" data-tauri-drag-region>
 		{#if context}

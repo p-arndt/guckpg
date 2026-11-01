@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
+import { version } from '../../../package.json';
 import TopBarTestWrapper from './TopBarTestWrapper.svelte';
 
 describe('sidebar toggle', () => {
@@ -10,6 +11,7 @@ describe('sidebar toggle', () => {
 			onToggleSidebar
 		});
 		expect(screen.getByText('pieg')).toBeTruthy();
+		expect(screen.getByText(`v${version}`)).toBeTruthy();
 		const toggle = screen.getByRole('button', { name: 'Hide sidebar' });
 		expect(toggle.getAttribute('aria-expanded')).toBe('true');
 		await fireEvent.click(toggle);

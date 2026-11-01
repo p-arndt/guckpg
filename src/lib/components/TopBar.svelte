@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { version } from '../../../package.json';
 	import { shortcut } from '#lib/shortcut.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import BackupDialog from './BackupDialog.svelte';
@@ -134,7 +135,10 @@ traffic lights sit in its left inset. Only the bar itself drags, never its contr
 		title={`${sidebarOpen ? 'Hide' : 'Show'} sidebar (${shortcut('B')})`}
 		onclick={onToggleSidebar}><PanelLeftIcon /></Button
 	>
-	<span class="text-[15px] font-semibold tracking-[-0.02em]" data-tauri-drag-region>pieg</span>
+	<div class="flex shrink-0 items-baseline gap-1.5" data-tauri-drag-region>
+		<span class="text-[15px] font-semibold tracking-[-0.02em]" data-tauri-drag-region>pieg</span>
+		<span class="text-xs text-muted-foreground" data-tauri-drag-region>v{version}</span>
+	</div>
 
 	<div class="flex min-w-0 flex-1 basis-0 items-center gap-2 text-sm" data-tauri-drag-region>
 		{#if context}

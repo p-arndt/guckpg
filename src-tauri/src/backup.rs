@@ -253,11 +253,13 @@ mod tests {
         let Some((cfg, password)) = crate::testutil::test_db("backup-roundtrip") else {
             return;
         };
-        if ["pg_dump", "pg_restore", "psql"]
-            .iter()
-            .any(|tool| Command::new(tool).arg("--version").output().is_err())
-        {
-            eprintln!("PostgreSQL client tools unavailable; skipping backup round trip");
+        if ["pg_dump", "pg_restore", "psql"].iter().any(|tool| {
+            !Command::new(tool)
+                .arg("--version")
+                .output()
+                .is_ok_and(|out| out.status.success())
+        }) {
+            crate::testutil::skip_or_fail("PostgreSQL client tools");
             return;
         }
         let conn = crate::pg::PgConn::connect(

@@ -218,6 +218,21 @@ impl Manager {
         Ok(tab.conn.clone())
     }
 
+    pub async fn result_page(
+        &self,
+        tab_id: &str,
+        cache_id: &str,
+        result: usize,
+        page: usize,
+    ) -> AppResult<Vec<Vec<Option<String>>>> {
+        let tab = self
+            .tabs
+            .peek(tab_id)
+            .await
+            .ok_or_else(|| AppError::msg("query results are no longer available"))?;
+        tab.conn.result_page(cache_id, result, page).await
+    }
+
     pub async fn cancel(&self, tab_id: &str) -> AppResult<()> {
         let tab = self
             .tabs

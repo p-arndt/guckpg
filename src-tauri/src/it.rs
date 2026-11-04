@@ -52,6 +52,25 @@ async fn runs_scripts_with_several_results() {
 }
 
 #[tokio::test]
+async fn cached_pages_do_not_reexecute_statements_and_reject_old_results() {
+    let Some(conn) = direct().await else { return };
+    let output = conn.run_cached("CREATE TEMP SEQUENCE page_sequence; SELECT nextval('page_sequence') FROM generate_series(1, 3)", 2).await.unwrap();
+    let id = output.cache_id.unwrap();
+    assert_eq!(output.results.len(), 2);
+    assert_eq!(
+        conn.result_page(&id, 1, 1).await.unwrap(),
+        vec![vec![Some("3".to_string())]]
+    );
+    let value = conn
+        .run("SELECT last_value FROM page_sequence", 1)
+        .await
+        .unwrap();
+    assert_eq!(value.results[0].rows[0][0].as_deref(), Some("3"));
+    conn.run_cached("SELECT 9", 2).await.unwrap();
+    assert!(conn.result_page(&id, 1, 0).await.is_err());
+}
+
+#[tokio::test]
 async fn reports_errors_with_position() {
     let Some(conn) = direct().await else { return };
     let err = conn

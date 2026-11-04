@@ -3,11 +3,14 @@
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import TableIcon from '@lucide/svelte/icons/table-2';
-	import { errorMessage, type AppError, type QueryOutput } from '#lib/api.js';
+	import { api, errorMessage, type AppError, type QueryOutput } from '#lib/api.js';
+	import { confirmDiscard } from '#lib/state/confirm.svelte.js';
+	import { toast } from 'svelte-sonner';
 	import { formatCount, formatDuration } from '#lib/format.js';
 	import { splitStatements } from '#lib/sql-text.js';
 	import type { ComponentProps } from 'svelte';
 	import ResultGrid from './ResultGrid.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
 	import SqlBlock from './SqlBlock.svelte';
 
 	interface Props {
@@ -15,6 +18,7 @@
 		output: QueryOutput | null;
 		error: AppError | null;
 		sql?: string;
+		tabId?: string;
 		editTarget?: ComponentProps<typeof ResultGrid>['editTarget'];
 		onSaved?: () => void;
 		onDirtyChange?: (count: number) => void;
@@ -25,12 +29,17 @@
 		output,
 		error,
 		sql = '',
+		tabId,
 		editTarget = null,
 		onSaved,
 		onDirtyChange
 	}: Props = $props();
 
 	let picked = $state<number | null>(null);
+	let page = $state(0);
+	let pageRows = $state.raw<(string | null)[][] | null>(null);
+	let pageBusy = $state(false);
+	let dirty = $state(0);
 
 	// The last result with rows is what people want to see after a script.
 	const defaultIndex = $derived.by(() => {
@@ -42,10 +51,37 @@
 	$effect(() => {
 		void output;
 		picked = null;
+		page = 0;
+		pageRows = null;
 	});
 
 	const index = $derived(picked ?? defaultIndex);
 	const current = $derived(output?.results[index]);
+	const displayedRows = $derived(pageRows ?? current?.rows ?? []);
+	const pageSize = $derived(current?.rows.length ?? 0);
+	const pageCount = $derived(pageSize ? Math.ceil((current?.rowCount ?? 0) / pageSize) : 0);
+
+	async function changePage(next: number) {
+		if (!tabId || !output?.cacheId || pageBusy || next < 0 || next >= pageCount) return;
+		if (!(await confirmDiscard(dirty))) return;
+		const source = output;
+		const result = index;
+		pageBusy = true;
+		try {
+			const rows =
+				next === 0
+					? source.results[result].rows
+					: await api.queryResultPage(tabId, source.cacheId!, result, next);
+			if (output !== source || index !== result) return;
+			pageRows = rows;
+			page = next;
+		} catch (e) {
+			toast.error(errorMessage(e));
+		} finally {
+			pageBusy = false;
+		}
+	}
+
 	const statements = $derived.by(() => {
 		const parts = splitStatements(sql);
 		return parts.length === output?.results.length ? parts : [];
@@ -66,7 +102,11 @@
 							index
 								? 'bg-hover text-foreground'
 								: 'hover:bg-hover/60 hover:text-foreground'}"
-							onclick={() => (picked = i)}
+							onclick={() => {
+								picked = i;
+								page = 0;
+								pageRows = null;
+							}}
 						>
 							<span class="measured text-muted-foreground">{i + 1}</span>
 							{#if statements[i]}
@@ -91,7 +131,23 @@
 				{:else if error}
 					<span class="text-bad">Failed</span>
 				{:else if output}
-					{#if current?.truncated}
+					{#if tabId && output.cacheId && pageCount > 1}
+						<Button
+							size="sm"
+							variant="outline"
+							disabled={page === 0 || pageBusy || running}
+							onclick={() => changePage(page - 1)}
+							aria-label="Previous page">Previous</Button
+						>
+						<span>Page {page + 1} of {pageCount}</span>
+						<Button
+							size="sm"
+							variant="outline"
+							disabled={page + 1 >= pageCount || pageBusy || running}
+							onclick={() => changePage(page + 1)}
+							aria-label="Next page">Next</Button
+						>
+					{:else if current?.truncated}
 						<span class="chip chip-signal">
 							first <span class="measured">{formatCount(current.rows.length)}</span> of
 							<span class="measured">{formatCount(current.rowCount)}</span>
@@ -152,11 +208,15 @@
 		{:else if current && current.columns.length}
 			<ResultGrid
 				columns={current.columns}
-				rows={current.rows}
+				rows={displayedRows}
+				rowOffset={page * pageSize}
 				source={current.source}
 				{editTarget}
 				{onSaved}
-				{onDirtyChange}
+				onDirtyChange={(count) => {
+					dirty = count;
+					onDirtyChange?.(count);
+				}}
 			/>
 		{:else if current}
 			<div class="flex flex-col gap-1 p-6">

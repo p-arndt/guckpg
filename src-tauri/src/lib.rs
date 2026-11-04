@@ -7,6 +7,7 @@ mod csv_transfer;
 mod editing;
 mod error;
 mod explain;
+mod file_dialog;
 mod guard;
 #[cfg(test)]
 mod it;
@@ -31,6 +32,7 @@ pub fn run() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -53,6 +55,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            file_dialog::choose_file,
             backup::backup_database,
             backup::restore_database,
             csv_transfer::import_csv,
@@ -91,6 +94,7 @@ pub fn run() {
             commands::schema_diagram,
             commands::completion_tables,
             commands::run_query,
+            commands::query_result_page,
             commands::browse_table,
             commands::apply_changes,
             commands::preview_changes,

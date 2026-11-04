@@ -270,7 +270,18 @@ pub async fn run_query(
     max_rows: usize,
 ) -> AppResult<QueryOutput> {
     let conn = manager.tab(&tab_id, &id, &database).await?;
-    conn.run_editable(&sql, max_rows.min(MAX_ROWS_LIMIT)).await
+    conn.run_cached(&sql, max_rows.min(MAX_ROWS_LIMIT)).await
+}
+
+#[tauri::command]
+pub async fn query_result_page(
+    manager: State<'_, Manager>,
+    tab_id: String,
+    cache_id: String,
+    result: usize,
+    page: usize,
+) -> AppResult<Vec<Vec<Option<String>>>> {
+    manager.result_page(&tab_id, &cache_id, result, page).await
 }
 
 #[derive(Serialize)]

@@ -228,6 +228,7 @@ export interface ResultSet {
 }
 
 export interface QueryOutput {
+	cacheId?: string;
 	results: ResultSet[];
 	elapsedMs: number;
 }
@@ -365,6 +366,8 @@ export const api = {
 		invoke<QueryOutput>('explain_query', { tabId, id, database, sql }),
 	runQuery: (tabId: string, id: string, database: string, sql: string, maxRows: number) =>
 		invoke<QueryOutput>('run_query', { tabId, id, database, sql, maxRows }),
+	queryResultPage: (tabId: string, cacheId: string, result: number, page: number) =>
+		invoke<(string | null)[][]>('query_result_page', { tabId, cacheId, result, page }),
 	browseTable: (tabId: string, id: string, database: string, request: BrowseRequest) =>
 		invoke<BrowseOutput>('browse_table', { tabId, id, database, request }),
 	applyChanges: (id: string, database: string, schema: string, table: string, changes: Change[]) =>

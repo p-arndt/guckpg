@@ -6,6 +6,7 @@
 				kind: 'cell';
 				selected: boolean;
 				canEdit: boolean;
+				canGenerateUuid: boolean;
 				canRevert: boolean;
 				rowDeleted: boolean;
 		  };
@@ -17,6 +18,7 @@
 		addRow: () => void;
 		editCell: () => void;
 		setNull: () => void;
+		generateUuid: () => void;
 		revertCell: () => void;
 		undo: () => void;
 		copyValue: () => void;
@@ -76,6 +78,9 @@
 			<ContextMenu.Item disabled={!target.canEdit} onSelect={actions.setNull}>
 				Set NULL
 			</ContextMenu.Item>
+			{#if target.canGenerateUuid}
+				<ContextMenu.Item onSelect={actions.generateUuid}>Generate UUID</ContextMenu.Item>
+			{/if}
 			<ContextMenu.Item disabled={!target.canRevert} onSelect={actions.revertCell}>
 				Revert cell
 			</ContextMenu.Item>

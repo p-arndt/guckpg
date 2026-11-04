@@ -485,6 +485,11 @@
 			else edits.undo();
 			return;
 		}
+		if (mod && e.key.toLowerCase() === 'a') {
+			e.preventDefault();
+			if (items.length) pickRows(items.length - 1, 0);
+			return;
+		}
 		if (!selected) return;
 		if (picked && onPickedKey(e, mod)) return;
 		if (mod && e.key === 'c') {
@@ -616,6 +621,11 @@
 					kind: 'cell',
 					selected: selected !== null,
 					canEdit: !!selected && !!selectedItem && canEdit(selectedItem, selected.col),
+					canGenerateUuid:
+						!!selected &&
+						selectedItem?.kind === 'new' &&
+						canEdit(selectedItem, selected.col) &&
+						columnTypes[columns[selected.col]]?.toLowerCase() === 'uuid',
 					canRevert:
 						!!selected &&
 						selectedItem?.kind === 'row' &&
@@ -637,6 +647,8 @@
 		addRow,
 		editCell: () => selected && startEdit(selected.row, selected.col),
 		setNull: () => selected && selectedItem && setValue(selectedItem, selected.col, null),
+		generateUuid: () =>
+			selected && selectedItem && setValue(selectedItem, selected.col, crypto.randomUUID()),
 		revertCell: () => selected && revertCell(selected.row, selected.col),
 		undo: () => edits.undo(),
 		copyValue: () => void copy(selectedValue() ?? '', 'value'),

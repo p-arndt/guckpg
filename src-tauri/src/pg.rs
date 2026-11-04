@@ -3,6 +3,7 @@
 //! as Postgres prints them, every type works without decoding, and a script
 //! with several statements returns one result set per statement.
 
+use std::io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -37,6 +38,7 @@ pub struct PgConn {
     host: String,
     port: u16,
     tls: MakeRustlsConnect,
+    result_cache: tokio::sync::Mutex<Option<ResultCache>>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -70,6 +72,66 @@ impl ResultSet {
 pub struct QueryOutput {
     pub results: Vec<ResultSet>,
     pub elapsed_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_id: Option<String>,
+}
+
+struct CachedSet {
+    file: Option<BufWriter<std::fs::File>>,
+    offsets: Vec<u64>,
+    count: usize,
+}
+
+impl CachedSet {
+    fn new() -> AppResult<Self> {
+        Ok(Self {
+            file: None,
+            offsets: Vec::new(),
+            count: 0,
+        })
+    }
+
+    fn push(&mut self, row: &[Option<String>], page_size: usize) -> AppResult<()> {
+        if self.file.is_none() {
+            self.file = Some(BufWriter::new(tempfile::tempfile()?));
+        }
+        let file = self.file.as_mut().expect("file initialized");
+        if self.count.is_multiple_of(page_size) {
+            self.offsets.push(file.stream_position()?);
+        }
+        serde_json::to_writer(&mut *file, row)?;
+        file.write_all(b"\n")?;
+        self.count += 1;
+        Ok(())
+    }
+
+    fn page(&mut self, page: usize, page_size: usize) -> AppResult<Vec<Vec<Option<String>>>> {
+        let offset = *self
+            .offsets
+            .get(page)
+            .ok_or_else(|| AppError::msg("result page does not exist"))?;
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| AppError::msg("result page does not exist"))?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut reader = BufReader::new(file.get_mut());
+        let mut rows = Vec::new();
+        for _ in 0..page_size {
+            let mut line = String::new();
+            if reader.read_line(&mut line)? == 0 {
+                break;
+            }
+            rows.push(serde_json::from_str(&line)?);
+        }
+        Ok(rows)
+    }
+}
+
+struct ResultCache {
+    id: String,
+    page_size: usize,
+    sets: Vec<CachedSet>,
 }
 
 static PROVIDER: LazyLock<Arc<CryptoProvider>> =
@@ -340,6 +402,7 @@ impl PgConn {
             host: cfg.host.clone(),
             port: cfg.port,
             tls,
+            result_cache: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -371,6 +434,106 @@ impl PgConn {
             only.source = crate::editing::source_info(&self.client, sql).await;
         }
         Ok(output)
+    }
+
+    pub async fn run_cached(&self, sql: &str, page_size: usize) -> AppResult<QueryOutput> {
+        *self.result_cache.lock().await = None;
+        let page_size = page_size.max(1);
+        let started = Instant::now();
+        let stream = self.client.simple_query_raw(sql).await?;
+        pin_mut!(stream);
+        let mut results = Vec::new();
+        let mut sets = Vec::new();
+        let mut current: Option<(ResultSet, CachedSet)> = None;
+        while let Some(msg) = stream.next().await {
+            match msg? {
+                SimpleQueryMessage::RowDescription(cols) => {
+                    current = Some((
+                        ResultSet::new(cols.iter().map(|c| c.name().to_string()).collect()),
+                        CachedSet::new()?,
+                    ));
+                }
+                SimpleQueryMessage::Row(row) => {
+                    if current.is_none() {
+                        current = Some((
+                            ResultSet::new(
+                                row.columns().iter().map(|c| c.name().to_string()).collect(),
+                            ),
+                            CachedSet::new()?,
+                        ));
+                    }
+                    let (set, cache) = current.as_mut().unwrap();
+                    let values: Vec<Option<String>> = (0..row.len())
+                        .map(|i| row.get(i).map(str::to_string))
+                        .collect();
+                    if set.rows.len() < page_size {
+                        set.rows.push(values);
+                    } else {
+                        if cache.count == 0 {
+                            for row in &set.rows {
+                                cache.push(row, page_size)?;
+                            }
+                        }
+                        cache.push(&values, page_size)?;
+                    }
+                }
+                SimpleQueryMessage::CommandComplete(count) => {
+                    let (mut set, cache) = match current.take() {
+                        Some(value) => value,
+                        None => (ResultSet::new(Vec::new()), CachedSet::new()?),
+                    };
+                    set.row_count = count;
+                    set.truncated = cache.count > page_size;
+                    results.push(set);
+                    sets.push(cache);
+                }
+                _ => {}
+            }
+        }
+        if let Some((mut set, cache)) = current {
+            set.row_count = if cache.count == 0 {
+                set.rows.len()
+            } else {
+                cache.count
+            } as u64;
+            set.truncated = cache.count > page_size;
+            results.push(set);
+            sets.push(cache);
+        }
+        if let [only] = results.as_mut_slice()
+            && !only.columns.is_empty()
+        {
+            only.source = crate::editing::source_info(&self.client, sql).await;
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        *self.result_cache.lock().await = Some(ResultCache {
+            id: id.clone(),
+            page_size,
+            sets,
+        });
+        Ok(QueryOutput {
+            results,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            cache_id: Some(id),
+        })
+    }
+
+    pub async fn result_page(
+        &self,
+        cache_id: &str,
+        result: usize,
+        page: usize,
+    ) -> AppResult<Vec<Vec<Option<String>>>> {
+        let mut guard = self.result_cache.lock().await;
+        let cache = guard
+            .as_mut()
+            .filter(|cache| cache.id == cache_id)
+            .ok_or_else(|| AppError::msg("query results are no longer available"))?;
+        let set = cache
+            .sets
+            .get_mut(result)
+            .ok_or_else(|| AppError::msg("result does not exist"))?;
+        set.page(page, cache.page_size)
     }
 
     pub async fn run(&self, sql: &str, max_rows: usize) -> AppResult<QueryOutput> {
@@ -416,6 +579,7 @@ impl PgConn {
         Ok(QueryOutput {
             results,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            cache_id: None,
         })
     }
 }
@@ -434,6 +598,24 @@ fn tls_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_pages_preserve_values_and_boundaries() {
+        let mut cache = CachedSet::new().unwrap();
+        assert!(cache.file.is_none());
+        let rows = vec![
+            vec![Some("first\nline".into()), None],
+            vec![Some("second".into())],
+            vec![Some("third".into())],
+        ];
+        for row in &rows {
+            cache.push(row, 2).unwrap();
+        }
+        assert_eq!(cache.page(0, 2).unwrap(), rows[..2]);
+        assert_eq!(cache.page(1, 2).unwrap(), rows[2..]);
+        assert!(cache.page(2, 2).is_err());
+        assert_eq!(cache.page(0, 2).unwrap(), rows[..2]);
+    }
 
     fn sample() -> ConnectionConfig {
         ConnectionConfig {

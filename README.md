@@ -48,13 +48,15 @@ Use **Check for updates** in the app to install a newer release. Save your work 
 
 ## Database tools
 
-Open a table to import or export CSV (UTF-8, up to 16 MiB). Import maps the header to column names and inserts rows. Export includes the entire table or view.
+Open a table to import or export CSV using the file picker (UTF-8). Import maps the header to column names and inserts rows. Export includes the entire table or view.
 
 Use the table filter to search a column across all rows, and the row form to choose values for single-column foreign keys in the same schema. The picker shows up to 100 values; manual entry remains available. The SQL editor shows catalog matches on hover.
 
 **Generate test data** previews an INSERT for 1–1,000 rows before applying it. It generates common types for required columns without defaults; unsupported required types, constraints, existing values, or triggers may prevent insertion.
 
-The connection menu offers schema comparison, session monitoring, and backup/restore. Schema comparison reports relation kinds and column properties; it does not compare constraints, indexes, or object definitions. Backups use local `pg_dump` and `pg_restore`, require direct connectivity, and use custom-format archives. Restore replaces matching objects and requires confirmation; SSH connections are not supported.
+The connection menu offers schema comparison, session monitoring, and backup/restore. Schema comparison reports relation kinds and column properties; it does not compare constraints, indexes, or object definitions. Backups use locally installed `pg_dump`, `pg_restore`, and `psql` and require direct connectivity. Export a custom archive or SQL file, choose schema, data, or both, and optionally supply PostgreSQL table patterns. Custom archive restore can replace matching objects or stop on conflicts; SQL restore executes the file as written. Restore requires confirmation, and SSH connections are not supported.
+
+Query results can be browsed page by page. The app stores the full result in temporary files until the tab runs another query or disconnects, so large results require sufficient local disk space.
 
 In a query tab, **Explain** displays the estimated PostgreSQL plan for the selection or current statement without running the query. Session visibility depends on PostgreSQL permissions.
 

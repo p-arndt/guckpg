@@ -1,4 +1,4 @@
-//! PostgreSQL custom-format archives using the locally installed client tools.
+//! PostgreSQL backups using the locally installed client tools.
 
 use std::fs::{self, File, OpenOptions};
 use std::path::Path;
@@ -75,16 +75,55 @@ fn database_option(database: &str) -> String {
     )
 }
 
+struct TransferOptions {
+    restore: bool,
+    sql: bool,
+    tables: Vec<String>,
+    contents: String,
+    clean: bool,
+}
+
+fn export_options(cmd: &mut Command, options: &TransferOptions) -> AppResult<()> {
+    match options.contents.as_str() {
+        "all" => {}
+        "schema" => {
+            cmd.arg("--schema-only");
+        }
+        "data" => {
+            cmd.arg("--data-only");
+        }
+        _ => return Err(AppError::msg("Invalid backup contents")),
+    }
+    if options.clean && options.contents != "data" {
+        cmd.args(["--clean", "--if-exists"]);
+    }
+    for table in options.tables.iter().filter(|t| !t.trim().is_empty()) {
+        cmd.arg("--table").arg(table.trim());
+    }
+    cmd.arg(if options.sql {
+        "--format=plain"
+    } else {
+        "--format=custom"
+    });
+    Ok(())
+}
+
 fn run(
     cfg: ConnectionConfig,
     database: String,
     path: String,
     password: Option<String>,
-    restore: bool,
+    options: TransferOptions,
 ) -> AppResult<()> {
+    let TransferOptions { restore, sql, .. } = &options;
+    let (restore, sql) = (*restore, *sql);
     validate(&cfg, &database, &path, restore)?;
     let mut cmd = command(
-        if restore { "pg_restore" } else { "pg_dump" },
+        if restore {
+            if sql { "psql" } else { "pg_restore" }
+        } else {
+            "pg_dump"
+        },
         &cfg,
         &database,
         password.as_deref(),
@@ -92,20 +131,27 @@ fn run(
     if restore {
         let file = File::open(&path)?;
         cmd.arg("--dbname").arg(database_option(&database));
-        cmd.args([
-            "--exit-on-error",
-            "--single-transaction",
-            "--clean",
-            "--if-exists",
-        ])
-        .stdin(Stdio::from(file))
-        .stdout(Stdio::null());
+        if sql {
+            cmd.args([
+                "--no-psqlrc",
+                "--set=ON_ERROR_STOP=1",
+                "--single-transaction",
+                "--file=-",
+            ]);
+        } else {
+            cmd.args(["--exit-on-error", "--single-transaction"]);
+            if options.clean {
+                cmd.args(["--clean", "--if-exists"]);
+            }
+        }
+        cmd.stdin(Stdio::from(file)).stdout(Stdio::null());
     } else {
+        export_options(&mut cmd, &options)?;
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)?;
-        cmd.arg("--format=custom").stdout(Stdio::from(file));
+        cmd.stdout(Stdio::from(file));
     }
     let output = cmd.output();
     if !restore && !output.as_ref().is_ok_and(|o| o.status.success()) {
@@ -122,18 +168,41 @@ fn run(
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+pub struct ExportOptions {
+    sql: bool,
+    tables: Vec<String>,
+    contents: String,
+    clean: bool,
+}
+
 #[tauri::command]
 pub async fn backup_database(
     manager: State<'_, Manager>,
     id: String,
     database: String,
     path: String,
+    options: ExportOptions,
 ) -> AppResult<()> {
     let cfg = manager.store.get(&id)?;
     let password = load_secrets(&id)?.password;
-    tauri::async_runtime::spawn_blocking(move || run(cfg, database, path, password, false))
-        .await
-        .map_err(|e| AppError::msg(e.to_string()))?
+    tauri::async_runtime::spawn_blocking(move || {
+        run(
+            cfg,
+            database,
+            path,
+            password,
+            TransferOptions {
+                restore: false,
+                sql: options.sql,
+                tables: options.tables,
+                contents: options.contents,
+                clean: options.clean,
+            },
+        )
+    })
+    .await
+    .map_err(|e| AppError::msg(e.to_string()))?
 }
 
 #[tauri::command]
@@ -142,12 +211,28 @@ pub async fn restore_database(
     id: String,
     database: String,
     path: String,
+    sql: bool,
+    replace: bool,
 ) -> AppResult<()> {
     let cfg = manager.store.get(&id)?;
     let password = load_secrets(&id)?.password;
-    tauri::async_runtime::spawn_blocking(move || run(cfg, database, path, password, true))
-        .await
-        .map_err(|e| AppError::msg(e.to_string()))?
+    tauri::async_runtime::spawn_blocking(move || {
+        run(
+            cfg,
+            database,
+            path,
+            password,
+            TransferOptions {
+                restore: true,
+                sql,
+                tables: Vec::new(),
+                contents: "all".into(),
+                clean: replace,
+            },
+        )
+    })
+    .await
+    .map_err(|e| AppError::msg(e.to_string()))?
 }
 
 #[cfg(test)]
@@ -162,6 +247,129 @@ mod tests {
             database: "db".into(),
             ..crate::testutil::connection("id")
         }
+    }
+    #[tokio::test]
+    async fn selected_table_sql_and_archive_round_trip() {
+        let Some((cfg, password)) = crate::testutil::test_db("backup-roundtrip") else {
+            return;
+        };
+        if ["pg_dump", "pg_restore", "psql"]
+            .iter()
+            .any(|tool| Command::new(tool).arg("--version").output().is_err())
+        {
+            eprintln!("PostgreSQL client tools unavailable; skipping backup round trip");
+            return;
+        }
+        let conn = crate::pg::PgConn::connect(
+            &cfg,
+            &cfg.database,
+            Some(&password),
+            crate::pg::Transport::Direct,
+        )
+        .await
+        .unwrap();
+        let schema = format!("backup_{}", uuid::Uuid::new_v4().simple());
+        let table = crate::sql::qualified(&schema, "records");
+        conn.client.batch_execute(&format!("CREATE SCHEMA \"{schema}\"; CREATE TABLE {table} (id integer PRIMARY KEY, value text); INSERT INTO {table} VALUES (1, 'hello'), (2, '世界')")).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        for sql in [true, false] {
+            let path = dir
+                .path()
+                .join(if sql { "backup.sql" } else { "backup.dump" })
+                .to_string_lossy()
+                .into_owned();
+            let cfg_copy = cfg.clone();
+            let db = cfg.database.clone();
+            let pw = password.clone();
+            let selected = format!("{schema}.records");
+            let export_path = path.clone();
+            tokio::task::spawn_blocking(move || {
+                run(
+                    cfg_copy,
+                    db,
+                    export_path,
+                    Some(pw),
+                    TransferOptions {
+                        restore: false,
+                        sql,
+                        tables: vec![selected],
+                        contents: "all".into(),
+                        clean: false,
+                    },
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            conn.client
+                .batch_execute(&format!("DROP TABLE {table}"))
+                .await
+                .unwrap();
+            let cfg_copy = cfg.clone();
+            let db = cfg.database.clone();
+            let pw = password.clone();
+            tokio::task::spawn_blocking(move || {
+                run(
+                    cfg_copy,
+                    db,
+                    path,
+                    Some(pw),
+                    TransferOptions {
+                        restore: true,
+                        sql,
+                        tables: vec![],
+                        contents: "all".into(),
+                        clean: false,
+                    },
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            let rows = conn
+                .client
+                .query(&format!("SELECT id, value FROM {table} ORDER BY id"), &[])
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[1].get::<_, &str>(1), "世界");
+        }
+        conn.client
+            .batch_execute(&format!("DROP SCHEMA \"{schema}\" CASCADE"))
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn export_options_select_format_tables_and_contents() {
+        let mut cmd = Command::new("pg_dump");
+        let mut options = TransferOptions {
+            restore: false,
+            sql: true,
+            tables: vec!["public.orders".into(), " odd table ".into()],
+            contents: "schema".into(),
+            clean: true,
+        };
+        export_options(&mut cmd, &options).unwrap();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--schema-only",
+                "--clean",
+                "--if-exists",
+                "--table",
+                "public.orders",
+                "--table",
+                "odd table",
+                "--format=plain"
+            ]
+        );
+        options.contents = "invalid".into();
+        assert!(export_options(&mut Command::new("pg_dump"), &options).is_err());
     }
     #[test]
     fn rejects_unsafe_or_unsupported_targets() {
@@ -193,7 +401,13 @@ mod tests {
                 "db".into(),
                 file.path().to_string_lossy().into(),
                 None,
-                false
+                TransferOptions {
+                    restore: false,
+                    sql: false,
+                    tables: Vec::new(),
+                    contents: "all".into(),
+                    clean: false
+                }
             )
             .is_err()
         );

@@ -67,6 +67,7 @@
 			if (!confirmed) return;
 			tab.sql = tab.viewSqlSnapshot;
 		}
+		if (tab.builderOpen && (tab.creatingView || editingView)) tab.viewSqlSnapshot = tab.sql;
 		tab.builderOpen = !tab.builderOpen;
 		if (tab.builderOpen) {
 			if (!builder) tab.builder = { database: tab.database, model: emptyModel() };
@@ -166,14 +167,16 @@
 			: sql;
 		const { prefix, sql: editorSql } = viewEditorContent(
 			tab.sql,
-			editingView ? tab.viewSqlSnapshot : null,
-			editingView ? tab.viewSqlPrefix : null,
+			tab.creatingView || editingView ? tab.viewSqlSnapshot : null,
+			tab.creatingView || editingView ? tab.viewSqlPrefix : null,
 			text
 		);
 		tab.sql = editorSql;
-		if (editingView) {
+		if (tab.creatingView || editingView) {
 			tab.viewSqlPrefix = prefix;
 			tab.viewSqlSnapshot = tab.sql;
+		}
+		if (editingView) {
 			tab.viewNotice =
 				'You are editing the view as SQL. Run the statement to apply changes; SQL edits do not update the visual builder.';
 		}
@@ -350,6 +353,7 @@
 				<ExplainPlan value={tab.plan} />
 			{:else}
 				<ResultsPanel
+					tabId={tab.id}
 					running={tab.running}
 					output={tab.output}
 					error={tab.error}

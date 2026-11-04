@@ -1,5 +1,16 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+vi.stubGlobal(
+	'ResizeObserver',
+	class {
+		observe() {}
+		unobserve() {}
+		disconnect() {}
+	}
+);
 import ResultsPanel from './ResultsPanel.svelte';
 
 const result = (rowCount: number) => ({
@@ -13,6 +24,38 @@ const result = (rowCount: number) => ({
 const output = { results: [result(1), result(2)], elapsedMs: 5 };
 
 describe('ResultsPanel', () => {
+	it('pages through cached rows without running SQL again', async () => {
+		invoke.mockResolvedValueOnce([['third']]);
+		render(ResultsPanel, {
+			running: false,
+			error: null,
+			tabId: 'tab-1',
+			output: {
+				cacheId: 'cache-1',
+				elapsedMs: 1,
+				results: [
+					{
+						columns: ['value'],
+						rows: [['first'], ['second']],
+						rowCount: 3,
+						truncated: true,
+						source: null
+					}
+				]
+			}
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+		expect(await screen.findByText('third')).toBeTruthy();
+		expect(invoke).toHaveBeenCalledWith('query_result_page', {
+			tabId: 'tab-1',
+			cacheId: 'cache-1',
+			result: 0,
+			page: 1
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
+		expect(screen.getByText('first')).toBeTruthy();
+	});
+
 	it('associates each result with its executed statement', async () => {
 		render(ResultsPanel, {
 			running: false,

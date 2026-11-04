@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0 - 2026-11-04
+
+### Added
+
+- Browse query results page by page without rerunning statements.
+- Export SQL dumps with table and content selection and restore SQL files.
+- Generate UUIDs from the context menu in new rows.
+- Select all displayed result rows with Ctrl/Cmd+A and copy them.
+- Show the current app version next to the name in the top bar.
+
+### Changed
+
+- Improve file selection and clarify backup and restore options.
+- Rebrand the desktop app from guckpg to pieg while preserving saved settings and credentials.
+
+### Fixed
+
+- Allow importing and exporting CSV files larger than 16 MiB.
+- Handle UTF-8 BOMs in CSV imports and reduce temporary files for SQL scripts.
+- Warn before discarding SQL edits when returning to the visual editor for a new view.
+
 ## 0.4.0 - 2026-10-29
 
 ### Added

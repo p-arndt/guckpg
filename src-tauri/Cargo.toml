@@ -1,6 +1,6 @@
 [package]
 name = "pieg"
-version = "0.4.0"
+version = "0.5.0"
 description = "Postgres client for the desktop"
 authors = ["p-arndt"]
 license = "MIT"

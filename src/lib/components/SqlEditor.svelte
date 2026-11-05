@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { basicSetup } from 'codemirror';
+	import { indentWithTab } from '@codemirror/commands';
 	import {
 		EditorView,
 		keymap,
@@ -164,6 +165,7 @@
 						])
 					),
 					basicSetup,
+					keymap.of([indentWithTab]),
 					language.of(languageFor(completion)),
 					syntaxHighlighting(highlight),
 					theme,

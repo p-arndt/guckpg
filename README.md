@@ -105,6 +105,6 @@ just release-dry
 just release patch              # or minor / major
 ```
 
-Run from a clean `main` branch with an `origin` remote and GitHub authentication. Stamp commits and pushes the release tag. CI and installer builds run in parallel; once both pass, the workflow publishes the release with the installers attached. Record user-facing changes with `just note fixed "…"`; the next release puts them into `CHANGELOG.md` and the release notes.
+Run from a clean `main` branch with an `origin` remote and GitHub authentication. Stamp commits and pushes the release tag. Release CI and installer builds run in parallel; the separate branch CI skips the generated release commit to avoid running the same checks twice. Once both pass, the workflow publishes the release with the installers attached. Record user-facing changes with `just note fixed "…"`; the next release puts them into `CHANGELOG.md` and the release notes.
 
 Release builds require the Tauri updater signing key and password in the GitHub Actions secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Keep a secure backup of both and never commit the private key. Installed versions trust the public key in the Tauri configuration, so replacing or losing the private key prevents them from installing future updates. Local builds do not need the signing key.

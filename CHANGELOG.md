@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.0 - 2026-11-05
+
+### Added
+
+- Edit SQL directly in the visual builder, preview drafts, and apply supported changes without switching views.
+- Show total matching rows for table browsing and paged query results.
+
+### Changed
+
+- Make visual and SQL view editor modes explicit, synchronize mode switches, and preserve table positions after SQL edits.
+
+### Fixed
+
+- Indent SQL in the editor with Tab and Shift+Tab.
+- Preserve supported SQL edits when returning to the visual view builder.
+
 ## 0.5.0 - 2026-11-04
 
 ### Added

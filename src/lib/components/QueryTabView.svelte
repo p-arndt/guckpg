@@ -6,10 +6,11 @@
 	import SquareIcon from '@lucide/svelte/icons/square';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import ListFilterIcon from '@lucide/svelte/icons/list-filter';
+	import CodeIcon from '@lucide/svelte/icons/code';
 	import SaveIcon from '@lucide/svelte/icons/save';
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import { confirmation } from '#lib/state/confirm.svelte.js';
-	import { replaceViewSql, viewEditorContent } from '#lib/view-builder.js';
+	import { importEditedViewSql, replaceViewSql, viewEditorContent } from '#lib/view-builder.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
@@ -41,6 +42,7 @@
 	let sizeBeforeBuilder: number | null = null;
 
 	const builder = $derived(tab.builder?.database === tab.database ? tab.builder.model : null);
+	const builderDraft = $derived(builder ? (tab.builder?.sqlDraft ?? null) : null);
 
 	function makeRoomForBuilder() {
 		const size = editorPane?.getSize() ?? 100;
@@ -56,23 +58,50 @@
 	});
 
 	async function toggleBuilder() {
+		if (tab.builderOpen && (tab.creatingView || editingView || builderDraft !== null) && builder) {
+			const sql = builderDraft ?? buildSql(builder).sql;
+			if (sql) {
+				openInEditor(sql);
+				return;
+			}
+		}
 		if (!tab.builderOpen && tab.viewSqlSnapshot !== null && tab.sql !== tab.viewSqlSnapshot) {
-			const confirmed = await confirmation.ask({
-				title: 'Discard SQL changes?',
-				description:
-					'The visual builder cannot include the SQL edits you made. Discard them to return to the visual editor.',
-				confirmLabel: 'Discard SQL changes',
-				destructive: true
-			});
-			if (!confirmed) return;
-			tab.sql = tab.viewSqlSnapshot;
+			const imported = importEditedViewSql(tab.sql, tab.viewSqlPrefix, completion, editingView);
+			if (imported) {
+				for (const table of imported.tables) {
+					const previous = builder?.tables.find(
+						(t) => t.schema === table.schema && t.name === table.name && t.alias === table.alias
+					);
+					if (previous) {
+						table.x = previous.x;
+						table.y = previous.y;
+					}
+				}
+				tab.builder = { database: tab.database, model: imported };
+				tab.viewSqlSnapshot = tab.sql;
+			} else {
+				const confirmed = await confirmation.ask({
+					title: 'Discard SQL changes?',
+					description:
+						'The visual builder cannot include the SQL edits you made. Discard them to return to the visual editor.',
+					confirmLabel: 'Discard SQL changes',
+					destructive: true
+				});
+				if (!confirmed) return;
+				tab.sql = tab.viewSqlSnapshot;
+			}
 		}
 		if (tab.builderOpen && (tab.creatingView || editingView)) tab.viewSqlSnapshot = tab.sql;
 		tab.builderOpen = !tab.builderOpen;
 		if (tab.builderOpen) {
 			if (!builder) tab.builder = { database: tab.database, model: emptyModel() };
 			makeRoomForBuilder();
-		} else if (sizeBeforeBuilder !== null) {
+		} else closeBuilder();
+	}
+
+	function closeBuilder() {
+		tab.builderOpen = false;
+		if (sizeBeforeBuilder !== null) {
 			editorPane?.resize(sizeBeforeBuilder);
 			sizeBeforeBuilder = null;
 		}
@@ -152,7 +181,7 @@
 		if (tab.running || !editor) return;
 		const text =
 			tab.builderOpen && builder
-				? buildSql(builder).sql
+				? (builderDraft ?? buildSql(builder).sql)
 				: (editor.selection()?.text ?? statementAt(tab.sql, editor.cursor())?.text);
 		if (text) void tab.explain(text);
 	}
@@ -167,20 +196,23 @@
 			: sql;
 		const { prefix, sql: editorSql } = viewEditorContent(
 			tab.sql,
-			tab.creatingView || editingView ? tab.viewSqlSnapshot : null,
-			tab.creatingView || editingView ? tab.viewSqlPrefix : null,
+			tab.viewSqlSnapshot,
+			tab.viewSqlPrefix,
 			text
 		);
 		tab.sql = editorSql;
-		if (tab.creatingView || editingView) {
-			tab.viewSqlPrefix = prefix;
-			tab.viewSqlSnapshot = tab.sql;
+		tab.viewSqlPrefix = prefix;
+		tab.viewSqlSnapshot = tab.sql;
+		if (builderDraft !== null && builder) {
+			const original = buildSql(builder).sql;
+			tab.viewSqlSnapshot = `${prefix}${editingView && original ? replaceViewSql(editingView.schema, editingView.name, editingView.details, original) : original}\n`;
+			if (tab.builder) tab.builder.sqlDraft = null;
 		}
 		if (editingView) {
 			tab.viewNotice =
-				'You are editing the view as SQL. Run the statement to apply changes; SQL edits do not update the visual builder.';
+				'You are editing the view as SQL. Run the statement to apply changes, or return to the visual editor for supported queries.';
 		}
-		void toggleBuilder();
+		closeBuilder();
 	}
 
 	async function rerun() {
@@ -232,27 +264,61 @@
 		</Select.Root>
 
 		<div class="ml-auto flex items-center gap-1.5">
-			<Button
-				size="sm"
-				variant={tab.builderOpen ? 'secondary' : 'ghost'}
-				aria-pressed={tab.builderOpen}
-				disabled={!!tab.viewNotice && !builder}
-				onclick={toggleBuilder}
-			>
-				<ListFilterIcon />
-				{tab.creatingView || editingView ? 'Visual editor' : 'Query builder'}
-			</Button>
+			{#if tab.creatingView || editingView}
+				<div
+					class="flex items-center gap-0.5 rounded-lg border bg-work p-0.5"
+					role="group"
+					aria-label="View editor mode"
+				>
+					<Button
+						size="sm"
+						variant={tab.builderOpen ? 'secondary' : 'ghost'}
+						aria-pressed={tab.builderOpen}
+						onclick={() => {
+							if (!tab.builderOpen) void toggleBuilder();
+						}}
+					>
+						<ListFilterIcon /> Visual editor
+					</Button>
+					<Button
+						size="sm"
+						variant={!tab.builderOpen ? 'secondary' : 'ghost'}
+						aria-pressed={!tab.builderOpen}
+						onclick={() => {
+							if (tab.builderOpen) void toggleBuilder();
+						}}
+					>
+						<CodeIcon /> SQL editor
+					</Button>
+				</div>
+			{:else}
+				<Button
+					size="sm"
+					variant={tab.builderOpen ? 'secondary' : 'ghost'}
+					aria-pressed={tab.builderOpen}
+					disabled={!!tab.viewNotice && !builder}
+					onclick={toggleBuilder}
+				>
+					<ListFilterIcon />
+					Query builder
+				</Button>
+			{/if}
 			{#if tab.builderOpen && builder}
 				{@const built = buildSql(builder)}
 				<Button
 					size="sm"
 					variant="outline"
-					disabled={!built.sql || tab.running || (connection?.readOnly ?? true)}
-					title={!built.sql
-						? 'Add a table and complete the query first'
-						: connection?.readOnly
-							? 'Read-only connection'
-							: 'Review the view SQL'}
+					disabled={builderDraft !== null ||
+						!built.sql ||
+						tab.running ||
+						(connection?.readOnly ?? true)}
+					title={builderDraft !== null
+						? 'Apply or discard the SQL edits first'
+						: !built.sql
+							? 'Add a table and complete the query first'
+							: connection?.readOnly
+								? 'Read-only connection'
+								: 'Review the view SQL'}
 					onclick={() => (saveViewOpen = true)}
 				>
 					<SaveIcon />
@@ -293,7 +359,7 @@
 							disabled={tab.running}
 							onclick={() => {
 								if (tab.builderOpen && builder) {
-									const { sql } = buildSql(builder);
+									const sql = builderDraft ?? buildSql(builder).sql;
 									if (sql) runBuilt(sql);
 								} else void execute(false);
 							}}
@@ -338,6 +404,12 @@
 			{#if tab.builderOpen && builder}
 				<QueryBuilder
 					model={builder}
+					bind:draft={
+						() => builderDraft,
+						(value) => {
+							if (tab.builder) tab.builder.sqlDraft = value;
+						}
+					}
 					connectionId={tab.connectionId}
 					database={tab.database}
 					tables={completion}

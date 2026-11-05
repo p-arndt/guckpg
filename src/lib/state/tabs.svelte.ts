@@ -54,7 +54,9 @@ export class QueryTab extends TabBase {
 		details: ViewDetails;
 	} | null>(null);
 	/** Kept while the tab lives so closing the builder does not lose the canvas. */
-	builder = $state<{ database: string; model: BuilderModel } | null>(null);
+	builder = $state<{ database: string; model: BuilderModel; sqlDraft?: string | null } | null>(
+		null
+	);
 	maxRows = $state(1000);
 	/** The EXPLAIN output shown instead of results; null shows results. */
 	plan = $state<string | null>(null);

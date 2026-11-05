@@ -38,10 +38,11 @@ export function importViewQuery(
 	query: string,
 	tables: CompletionTable[],
 	sources: ViewDetails['sources'],
-	searchPath: string[] = []
+	searchPath: string[] = [],
+	allowUnusedSources = false
 ): BuilderModel | null {
 	try {
-		return parse(query, tables, sources, searchPath);
+		return parse(query, tables, sources, searchPath, allowUnusedSources);
 	} catch {
 		return null;
 	}
@@ -51,7 +52,8 @@ function parse(
 	query: string,
 	tables: CompletionTable[],
 	sources: ViewDetails['sources'],
-	searchPath: string[]
+	searchPath: string[],
+	allowUnusedSources: boolean
 ): BuilderModel {
 	const tokens: string[] = [];
 	const lexer =
@@ -212,7 +214,8 @@ function parse(
 		}
 	};
 	from();
-	if (usedSources.size !== sources.length) throw new Error('Unsupported sources');
+	if (!allowUnusedSources && usedSources.size !== sources.length)
+		throw new Error('Unsupported sources');
 	const columns = new Set<string>();
 	for (const column of selected) {
 		if (column.alias !== column.alias.trim()) throw new Error('Unsupported alias');

@@ -12,7 +12,27 @@ export function createViewSql(schema: string, name: string, query: string): stri
 }
 
 import type { ViewDetails } from './api.js';
+import type { CompletionTable } from './api.js';
+import { importViewQuery } from './view-query-import.js';
 export { importViewQuery } from './view-query-import.js';
+
+export function importEditedViewSql(
+	current: string,
+	prefix: string | null,
+	tables: CompletionTable[],
+	view: { schema: string; name: string; details: ViewDetails } | null
+) {
+	if (prefix && !current.startsWith(prefix)) return null;
+	let query = current.slice(prefix?.length ?? 0);
+	if (view) {
+		const header = replaceViewSql(view.schema, view.name, view.details, 'SELECT 1').split(
+			'SELECT 1'
+		)[0];
+		if (!query.startsWith(header)) return null;
+		query = query.slice(header.length);
+	}
+	return importViewQuery(query, tables, tables, view?.details.searchPath ?? ['pg_catalog'], true);
+}
 
 export function replaceViewSql(
 	schema: string,

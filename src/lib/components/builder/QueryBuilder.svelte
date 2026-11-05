@@ -11,7 +11,8 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import { api, errorMessage, type CompletionTable, type Diagram } from '#lib/api.js';
-	import SqlBlock from '../SqlBlock.svelte';
+	import SqlEditor from '../SqlEditor.svelte';
+	import { importViewQuery } from '#lib/view-builder.js';
 	import {
 		addTable,
 		buildSql,
@@ -27,6 +28,7 @@
 
 	interface Props {
 		model: BuilderModel;
+		draft?: string | null;
 		connectionId: string;
 		database: string;
 		tables: CompletionTable[];
@@ -35,7 +37,16 @@
 		onopen: (sql: string) => void;
 	}
 
-	let { model, connectionId, database, tables, running, onrun, onopen }: Props = $props();
+	let {
+		model,
+		draft = $bindable(null),
+		connectionId,
+		database,
+		tables,
+		running,
+		onrun,
+		onopen
+	}: Props = $props();
 
 	let search = $state('');
 	let canvas = $state<BuilderCanvas | null>(null);
@@ -134,17 +145,42 @@
 	);
 
 	const built = $derived(buildSql(model));
-	const sqlClass =
-		'measured mx-2 mb-2 min-h-0 flex-1 overflow-auto rounded-lg border bg-work p-2.5 text-xs leading-relaxed whitespace-pre-wrap select-text';
+	const editorSql = $derived(draft ?? built.sql);
+	const imported = $derived(
+		draft === null ? null : importViewQuery(draft, tables, tables, ['pg_catalog'], true)
+	);
+
+	function editSql(value: string) {
+		draft = value === built.sql ? null : value;
+	}
+
+	function applySql() {
+		if (!imported) return;
+		for (const table of imported.tables) {
+			const previous = model.tables.find(
+				(t) => t.schema === table.schema && t.name === table.name && t.alias === table.alias
+			);
+			if (previous) {
+				table.x = previous.x;
+				table.y = previous.y;
+			}
+		}
+		Object.assign(model, imported);
+		draft = null;
+	}
+
+	function preview() {
+		if (editorSql.trim() && !running) onrun(editorSql);
+	}
 
 	function clear() {
 		Object.assign(model, emptyModel());
 	}
 
 	function keydown(event: KeyboardEvent) {
-		if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && built.sql) {
+		if (!event.defaultPrevented && (event.metaKey || event.ctrlKey) && event.key === 'Enter') {
 			event.preventDefault();
-			onrun(built.sql);
+			preview();
 		}
 	}
 </script>
@@ -170,7 +206,7 @@
 						{@const style = kindStyle('table')}
 						<button
 							type="button"
-							draggable="true"
+							draggable={draft === null}
 							class="group flex h-7 w-full items-center gap-1.5 rounded-lg px-2.5 text-left text-[13px] text-ink-2 hover:bg-hover hover:text-foreground"
 							title="Click or drag onto the canvas"
 							ondragstart={(e) => {
@@ -180,6 +216,7 @@
 								);
 								if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy';
 							}}
+							disabled={draft !== null}
 							onclick={() => add(table.schema, table.name)}
 						>
 							<style.icon class="size-3.5 shrink-0 {style.color}" />
@@ -200,9 +237,11 @@
 		</Resizable.Pane>
 		<Resizable.Handle />
 		<Resizable.Pane defaultSize={49} minSize={25}>
-			<SvelteFlowProvider>
-				<BuilderCanvas bind:this={canvas} {model} {columnsOf} onadd={add} />
-			</SvelteFlowProvider>
+			<div class="h-full" inert={draft !== null}>
+				<SvelteFlowProvider>
+					<BuilderCanvas bind:this={canvas} {model} {columnsOf} onadd={add} />
+				</SvelteFlowProvider>
+			</div>
 		</Resizable.Pane>
 		<Resizable.Handle />
 		<Resizable.Pane defaultSize={36} minSize={22} class="flex min-h-0 flex-col bg-chrome">
@@ -212,7 +251,7 @@
 					size="sm"
 					variant="ghost"
 					class="ml-auto text-muted-foreground"
-					disabled={model.tables.length === 0}
+					disabled={model.tables.length === 0 || draft !== null}
 					onclick={clear}
 				>
 					<EraserIcon /> Clear
@@ -225,7 +264,7 @@
 			>
 				<Resizable.Pane defaultSize={58} minSize={20} class="!overflow-y-auto">
 					{#if model.tables.length}
-						<ClausePanel {model} columns={columnOptions} />
+						<div inert={draft !== null}><ClausePanel {model} columns={columnOptions} /></div>
 					{:else}
 						<p class="p-3 text-xs text-muted-foreground">
 							Columns, joins, conditions and sorting appear here once a table is on the canvas.
@@ -243,24 +282,24 @@
 							class="ml-auto text-muted-foreground"
 							aria-label="Copy SQL"
 							title="Copy SQL"
-							disabled={!built.sql}
+							disabled={!editorSql.trim()}
 							onclick={async () => {
-								await navigator.clipboard.writeText(built.sql);
+								await navigator.clipboard.writeText(editorSql);
 								toast.success('Copied SQL');
 							}}><CopyIcon /></Button
 						>
 						<Button
 							size="sm"
 							variant="ghost"
-							disabled={!built.sql}
+							disabled={!editorSql.trim()}
 							title="Put the query into the SQL editor"
-							onclick={() => onopen(built.sql)}><SquarePenIcon /> Edit SQL</Button
+							onclick={() => onopen(editorSql)}><SquarePenIcon /> Expand</Button
 						>
 						<Button
 							size="sm"
 							class="pr-1.5"
-							disabled={!built.sql || running}
-							onclick={() => onrun(built.sql)}
+							disabled={!editorSql.trim() || running}
+							onclick={preview}
 						>
 							<PlayIcon class="fill-current" /> Preview
 							<kbd
@@ -269,7 +308,7 @@
 							>
 						</Button>
 					</div>
-					{#if built.problems.length && model.tables.length}
+					{#if draft === null && built.problems.length && model.tables.length}
 						<ul
 							class="mx-2 mb-2 flex flex-col gap-0.5 rounded-lg bg-signal-soft px-2.5 py-1.5 text-xs"
 						>
@@ -280,13 +319,27 @@
 							{/each}
 						</ul>
 					{/if}
-					{#if built.sql}
-						<SqlBlock sql={built.sql} class={sqlClass} />
-					{:else}
-						<pre class={sqlClass}><span class="text-muted-foreground"
-								>-- The query appears here as you build it.</span
-							></pre>
+					{#if draft !== null}
+						<div class="mx-2 mb-2 flex flex-wrap items-center gap-2 text-xs" role="status">
+							<span class="flex-1 text-muted-foreground"
+								>{imported
+									? 'Apply SQL changes to update the visual builder.'
+									: 'This SQL cannot be shown visually yet. Keep editing or expand the SQL editor.'}</span
+							>
+							<Button size="sm" variant="ghost" onclick={() => (draft = null)}>Discard edits</Button
+							>
+							<Button size="sm" disabled={!imported} onclick={applySql}>Apply to builder</Button>
+						</div>
 					{/if}
+					<div class="mx-2 mb-2 min-h-0 flex-1 overflow-hidden rounded-lg border bg-work">
+						<SqlEditor
+							autofocus={false}
+							bind:value={() => editorSql, editSql}
+							completion={tables}
+							onRun={preview}
+							onRunAll={preview}
+						/>
+					</div>
 				</Resizable.Pane>
 			</Resizable.PaneGroup>
 		</Resizable.Pane>

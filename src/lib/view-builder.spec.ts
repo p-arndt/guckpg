@@ -17,7 +17,12 @@ describe('createViewSql', () => {
 });
 
 import { buildSql } from './query-builder.js';
-import { importViewQuery, replaceViewSql, viewEditorContent } from './view-builder.js';
+import {
+	importEditedViewSql,
+	importViewQuery,
+	replaceViewSql,
+	viewEditorContent
+} from './view-builder.js';
 
 const tables = [
 	{ schema: 'public', name: 'customers', columns: ['id', 'name'] },
@@ -362,6 +367,38 @@ describe('boolean view filters', () => {
 });
 
 describe('view SQL editor handoff', () => {
+	it('imports edited filters and new sources without changing other editor statements', () => {
+		const details = { query: '', sources, searchPath: ['pg_catalog', 'public'], options: '' };
+		const prefix = 'SELECT 1;\n\n';
+		const sql =
+			prefix +
+			replaceViewSql(
+				'public',
+				'report',
+				details,
+				'SELECT customers.id FROM public.customers WHERE customers.id > 2;'
+			);
+		const model = importEditedViewSql(sql, prefix, tables, {
+			schema: 'public',
+			name: 'report',
+			details
+		});
+		expect(model && buildSql(model).sql).toContain('WHERE customers.id > 2');
+		expect(
+			importEditedViewSql(sql.replace('SELECT 1;', 'SELECT 2;'), prefix, tables, {
+				schema: 'public',
+				name: 'report',
+				details
+			})
+		).toBeNull();
+		expect(
+			importEditedViewSql(sql + '\nDROP TABLE customers;', prefix, tables, {
+				schema: 'public',
+				name: 'report',
+				details
+			})
+		).toBeNull();
+	});
 	it('preserves existing editor text and replaces the generated view statement on later handoffs', () => {
 		const first = viewEditorContent(
 			'SELECT 1;',

@@ -18,12 +18,13 @@
 	interface Props {
 		value: string;
 		completion?: CompletionTable[];
+		autofocus?: boolean;
 		/** Run the selection or the statement under the cursor. */
 		onRun?: () => void;
 		onRunAll?: () => void;
 	}
 
-	let { value = $bindable(), completion = [], onRun, onRunAll }: Props = $props();
+	let { value = $bindable(), completion = [], autofocus = true, onRun, onRunAll }: Props = $props();
 
 	let host: HTMLDivElement;
 	let view: EditorView | undefined;
@@ -189,7 +190,7 @@
 				]
 			})
 		});
-		view.focus();
+		if (autofocus) view.focus();
 		return () => view?.destroy();
 	});
 

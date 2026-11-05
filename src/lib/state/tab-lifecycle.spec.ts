@@ -21,6 +21,7 @@ function deferred<T>() {
 function page(sql: string, rows: string[][] = [['1']]): BrowseOutput {
 	return {
 		sql,
+		totalRows: rows.length,
 		elapsedMs: 1,
 		results: [{ columns: ['id'], rows, rowCount: rows.length, truncated: false, source: null }]
 	};
@@ -64,6 +65,7 @@ describe('TableTab', () => {
 			offset: 200
 		});
 		expect(tab.lastSql).toBe('SELECT 1');
+		expect(tab.totalRows).toBe(1);
 		expect(tab.running).toBe(false);
 	});
 

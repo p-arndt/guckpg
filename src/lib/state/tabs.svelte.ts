@@ -153,6 +153,7 @@ export class TableTab extends TabBase {
 	offset = $state(0);
 	columns = $state.raw<Column[]>([]);
 	lastSql = $state('');
+	totalRows = $state<number | null>(null);
 	/** Unsaved edits in the data grid and in the table designer; `dirty` is their sum. */
 	gridDirty = $state(0);
 	structureDirty = $state(0);
@@ -195,6 +196,7 @@ export class TableTab extends TabBase {
 				(out) => {
 					if (request !== this.#request) return;
 					this.lastSql = out.sql;
+					this.totalRows = out.totalRows;
 					this.output = { results: out.results, elapsedMs: out.elapsedMs };
 				},
 				(e) => {

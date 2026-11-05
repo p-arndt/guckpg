@@ -212,11 +212,19 @@
 				{:else}
 					no rows
 				{/if}
+				{#if result}
+					{#if tab.totalRows != null}
+						of {formatCount(tab.totalRows)}{:else}
+						· total unknown{/if}
+				{/if}
 			</span>
 			<Button
 				size="icon-sm"
 				variant="ghost"
-				disabled={tab.running || (result?.rows.length ?? 0) < tab.limit}
+				disabled={tab.running ||
+					(tab.totalRows != null
+						? tab.offset + (result?.rows.length ?? 0) >= tab.totalRows
+						: (result?.rows.length ?? 0) < tab.limit)}
 				onclick={() => guarded(() => tab.page(1))}
 				title="Next page"
 				aria-label="Next page"

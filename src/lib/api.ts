@@ -235,6 +235,7 @@ export interface QueryOutput {
 
 export interface BrowseOutput extends QueryOutput {
 	sql: string;
+	totalRows: number | null;
 }
 
 export interface BrowseRequest {

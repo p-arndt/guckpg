@@ -307,11 +307,23 @@ fn where_condition(filters: &[BrowseFilter]) -> AppResult<Option<String>> {
     Ok(condition)
 }
 
-pub fn browse_sql(req: &BrowseRequest, order: &RowOrder) -> AppResult<String> {
-    let mut sql = format!("SELECT * FROM {}", qualified(&req.schema, &req.table));
+fn browse_from(req: &BrowseRequest, columns: &str) -> AppResult<String> {
+    let mut sql = format!(
+        "SELECT {columns} FROM {}",
+        qualified(&req.schema, &req.table)
+    );
     if let Some(condition) = where_condition(&req.filters)? {
         sql.push_str(&format!(" WHERE {condition}"));
     }
+    Ok(sql)
+}
+
+pub fn browse_count_sql(req: &BrowseRequest) -> AppResult<String> {
+    browse_from(req, "count(*)")
+}
+
+pub fn browse_sql(req: &BrowseRequest, order: &RowOrder) -> AppResult<String> {
+    let mut sql = browse_from(req, "*")?;
     let mut terms = Vec::new();
     if let Some(sort) = &req.sort {
         let dir = match sort.dir {
@@ -499,6 +511,17 @@ mod tests {
         assert_eq!(
             browse_sql(&req, &RowOrder::Key(vec!["name".into(), "id".into()])).unwrap(),
             r#"SELECT * FROM "app"."t" ORDER BY "name" ASC, "id" LIMIT 50 OFFSET 50"#
+        );
+    }
+
+    #[test]
+    fn browse_count_uses_filters_without_paging_or_sorting() {
+        let req: BrowseRequest = serde_json::from_str(
+            r#"{"schema":"app","table":"items","sort":{"column":"id","dir":"desc"},"filters":[{"column":"status","op":"eq","value":"open"},{"column":"deleted","op":"isNull","connector":"OR"}],"limit":10,"offset":20}"#,
+        ).unwrap();
+        assert_eq!(
+            browse_count_sql(&req).unwrap(),
+            r#"SELECT count(*) FROM "app"."items" WHERE ("status" = 'open' OR "deleted" IS NULL)"#
         );
     }
 

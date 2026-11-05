@@ -44,6 +44,7 @@ describe('ResultsPanel', () => {
 				]
 			}
 		});
+		expect(screen.getByText('Page 1 of 2 · 3 rows total')).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
 		expect(await screen.findByText('third')).toBeTruthy();
 		expect(invoke).toHaveBeenCalledWith('query_result_page', {

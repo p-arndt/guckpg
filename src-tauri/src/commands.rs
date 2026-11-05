@@ -7,7 +7,7 @@ use crate::editing;
 use crate::error::{AppError, AppResult};
 use crate::pg::QueryOutput;
 use crate::session::Manager;
-use crate::sql::{BrowseRequest, Change, browse_sql};
+use crate::sql::{BrowseRequest, Change, browse_count_sql, browse_sql};
 
 /// Upper bound for rows kept per result set, so a careless `SELECT *` on a
 /// huge table cannot exhaust memory.
@@ -288,6 +288,7 @@ pub async fn query_result_page(
 #[serde(rename_all = "camelCase")]
 pub struct BrowseOutput {
     sql: String,
+    total_rows: Option<i64>,
     #[serde(flatten)]
     output: QueryOutput,
 }
@@ -308,7 +309,19 @@ pub async fn browse_table(
     let sql = browse_sql(&request, &order)?;
     let conn = manager.tab(&tab_id, &id, &database).await?;
     let output = conn.run_editable(&sql, request.limit as usize).await?;
-    Ok(BrowseOutput { sql, output })
+    let count_sql = browse_count_sql(&request)?;
+    let meta = manager.meta(&id, &database).await?;
+    let total_rows = meta
+        .client
+        .query_one(&count_sql, &[])
+        .await
+        .ok()
+        .map(|row| row.get(0));
+    Ok(BrowseOutput {
+        sql,
+        total_rows,
+        output,
+    })
 }
 
 /// Save grid edits. Runs on its own connection: never inside a transaction

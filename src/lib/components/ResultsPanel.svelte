@@ -139,7 +139,9 @@
 							onclick={() => changePage(page - 1)}
 							aria-label="Previous page">Previous</Button
 						>
-						<span>Page {page + 1} of {pageCount}</span>
+						<span
+							>Page {page + 1} of {pageCount} · {formatCount(current?.rowCount ?? 0)} rows total</span
+						>
 						<Button
 							size="sm"
 							variant="outline"

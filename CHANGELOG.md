@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0 - 2026-11-11
+
+### Added
+
+- Sort connections in the sidebar by name, last modified or last used
+
+### Changed
+
+- Run (⌘↵) now runs the whole script when nothing is selected, like Navicat; Run statement (⌘⇧↵) runs only the statement at the cursor
+
+### Fixed
+
+- Dragging a connection no longer opens a drop box below the list; drop on empty space to move it out of its folder
+- Tables open right away: the total row count loads afterwards and falls back to an estimate when an exact count takes too long
+
 ## 0.6.0 - 2026-11-05
 
 ### Added

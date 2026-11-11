@@ -7,11 +7,14 @@
 use std::collections::HashSet;
 
 use serde::Serialize;
-use tokio_postgres::Client;
+use tokio_postgres::error::SqlState;
 use tokio_postgres::types::Type;
+use tokio_postgres::{Client, SimpleQueryMessage};
 
 use crate::error::{AppError, AppResult};
-use crate::sql::{BEGIN_GUARDED, Change, RowOrder, change_sql, in_tx};
+use crate::sql::{
+    BEGIN_GUARDED, BrowseRequest, Change, RowOrder, browse_count_sql, change_sql, in_tx,
+};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -285,6 +288,59 @@ pub async fn row_order(client: &Client, schema: &str, table: &str) -> AppResult<
     } else {
         RowOrder::Unknown
     })
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RowCount {
+    pub rows: i64,
+    /// False when `rows` is the planner's estimate.
+    pub exact: bool,
+}
+
+/// How many rows a browse request matches. An exact `count(*)` reads the
+/// whole table, which takes seconds to minutes on big or remote tables and
+/// would hold up the tree's shared connection meanwhile, so it gets
+/// `timeout_ms`; past that an unfiltered table falls back to the planner's
+/// estimate and a filtered one stays unknown.
+pub async fn count_rows(
+    client: &Client,
+    req: &BrowseRequest,
+    timeout_ms: u32,
+) -> AppResult<Option<RowCount>> {
+    // One simple-query message runs as one implicit transaction, so SET LOCAL
+    // ends with it and never leaks into later queries on this connection.
+    let sql = format!(
+        "SET LOCAL statement_timeout = {timeout_ms}; {}",
+        browse_count_sql(req)?
+    );
+    match client.simple_query(&sql).await {
+        Ok(messages) => Ok(messages.iter().find_map(|m| match m {
+            SimpleQueryMessage::Row(row) => row
+                .get(0)?
+                .parse()
+                .ok()
+                .map(|rows| RowCount { rows, exact: true }),
+            _ => None,
+        })),
+        Err(e) if e.code() == Some(&SqlState::QUERY_CANCELED) && req.filters.is_empty() => {
+            let row = client
+                .query_typed_opt(
+                    "SELECT c.reltuples::int8 FROM pg_class c
+                     JOIN pg_namespace n ON n.oid = c.relnamespace
+                     WHERE n.nspname = $1 AND c.relname = $2",
+                    &[(&req.schema, Type::NAME), (&req.table, Type::NAME)],
+                )
+                .await?;
+            // -1 means never vacuumed or analyzed: no estimate to show.
+            Ok(row
+                .map(|r| r.get::<_, i64>(0))
+                .filter(|rows| *rows >= 0)
+                .map(|rows| RowCount { rows, exact: false }))
+        }
+        Err(e) if e.code() == Some(&SqlState::QUERY_CANCELED) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Apply all changes in one transaction. An UPDATE or DELETE that does not

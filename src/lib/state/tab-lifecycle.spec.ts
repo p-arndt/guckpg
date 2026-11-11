@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BrowseOutput, QueryOutput } from '#lib/api.js';
+import type { BrowseOutput, QueryOutput, RowCount } from '#lib/api.js';
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
@@ -21,7 +21,6 @@ function deferred<T>() {
 function page(sql: string, rows: string[][] = [['1']]): BrowseOutput {
 	return {
 		sql,
-		totalRows: rows.length,
 		elapsedMs: 1,
 		results: [{ columns: ['id'], rows, rowCount: rows.length, truncated: false, source: null }]
 	};
@@ -45,14 +44,16 @@ beforeEach(() => {
 describe('TableTab', () => {
 	it('loads a page with the current sort, filter and paging', async () => {
 		const tab = new Tabs().openTable('c1', 'db', 'public', 'users');
-		invoke.mockResolvedValue(page('SELECT 1'));
+		invoke.mockImplementation((cmd: string) =>
+			Promise.resolve(cmd === 'count_table_rows' ? { rows: 1, exact: true } : page('SELECT 1'))
+		);
 		await tab.applyFilter([
 			{ column: 'name', op: 'contains', value: 'ann', connector: 'AND' },
 			{ column: 'age', op: 'isNull', connector: 'OR' }
 		]);
 		await tab.sortBy('id');
 		await tab.page(1);
-		const [, args] = invoke.mock.calls.at(-1)!;
+		const [, args] = invoke.mock.calls.findLast(([cmd]) => cmd === 'browse_table')!;
 		expect(args.request).toEqual({
 			schema: 'public',
 			table: 'users',
@@ -65,7 +66,7 @@ describe('TableTab', () => {
 			offset: 200
 		});
 		expect(tab.lastSql).toBe('SELECT 1');
-		expect(tab.totalRows).toBe(1);
+		await vi.waitFor(() => expect(tab.totalRows).toEqual({ rows: 1, exact: true }));
 		expect(tab.running).toBe(false);
 	});
 
@@ -142,6 +143,52 @@ describe('TableTab', () => {
 		expect(tab.running).toBe(false);
 	});
 
+	it('shows the page before the count answers and keeps the count while paging', async () => {
+		const tab = new Tabs().openTable('c1', 'db', 'public', 'users');
+		const count = deferred<RowCount | null>();
+		invoke.mockImplementation((cmd: string) =>
+			cmd === 'count_table_rows' ? count.promise : Promise.resolve(page('x'))
+		);
+		await tab.load();
+		expect(tab.output).not.toBeNull();
+		expect(tab.running).toBe(false);
+		expect(tab.counting).toBe(true);
+		count.resolve({ rows: 5000, exact: false });
+		await vi.waitFor(() => expect(tab.counting).toBe(false));
+		expect(tab.totalRows).toEqual({ rows: 5000, exact: false });
+
+		await tab.page(1);
+		await tab.sortBy('id');
+		await tab.setLimit(500);
+		const counts = () => invoke.mock.calls.filter(([cmd]) => cmd === 'count_table_rows').length;
+		expect(counts()).toBe(1);
+		expect(tab.totalRows).toEqual({ rows: 5000, exact: false });
+
+		await tab.applyFilter([{ column: 'id', op: 'eq', value: '1', connector: 'AND' }]);
+		expect(counts()).toBe(2);
+		expect(invoke).toHaveBeenLastCalledWith('count_table_rows', {
+			id: 'c1',
+			database: 'db',
+			request: expect.objectContaining({ filters: tab.filters, offset: 0 })
+		});
+	});
+
+	it('drops a count that answers after a newer one started', async () => {
+		const tab = new Tabs().openTable('c1', 'db', 'public', 'users');
+		const older = deferred<RowCount | null>();
+		const newer = deferred<RowCount | null>();
+		const counts = [older, newer];
+		invoke.mockImplementation((cmd: string) =>
+			cmd === 'count_table_rows' ? counts.shift()!.promise : Promise.resolve(page('x'))
+		);
+		await tab.load();
+		await tab.load();
+		newer.resolve({ rows: 2, exact: true });
+		older.resolve({ rows: 1, exact: true });
+		await vi.waitFor(() => expect(tab.counting).toBe(false));
+		expect(tab.totalRows).toEqual({ rows: 2, exact: true });
+	});
+
 	it('stores load errors as app errors', async () => {
 		const tab = new Tabs().openTable('c1', 'db', 'public', 'users');
 		invoke.mockRejectedValue(new Error('gone'));
@@ -161,7 +208,11 @@ describe('TableTab', () => {
 		await tab.open();
 		await tab.open();
 		expect(tab.columns.map((c) => c.name)).toEqual(['id']);
-		expect(invoke.mock.calls.map(([cmd]) => cmd)).toEqual(['list_columns', 'browse_table']);
+		expect(invoke.mock.calls.map(([cmd]) => cmd)).toEqual([
+			'list_columns',
+			'browse_table',
+			'count_table_rows'
+		]);
 	});
 
 	it('sums grid and designer edits into dirty', () => {

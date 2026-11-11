@@ -235,7 +235,12 @@ export interface QueryOutput {
 
 export interface BrowseOutput extends QueryOutput {
 	sql: string;
-	totalRows: number | null;
+}
+
+export interface RowCount {
+	rows: number;
+	/** False when `rows` is the planner's estimate. */
+	exact: boolean;
 }
 
 export interface BrowseRequest {
@@ -371,6 +376,8 @@ export const api = {
 		invoke<(string | null)[][]>('query_result_page', { tabId, cacheId, result, page }),
 	browseTable: (tabId: string, id: string, database: string, request: BrowseRequest) =>
 		invoke<BrowseOutput>('browse_table', { tabId, id, database, request }),
+	countTableRows: (id: string, database: string, request: BrowseRequest) =>
+		invoke<RowCount | null>('count_table_rows', { id, database, request }),
 	applyChanges: (id: string, database: string, schema: string, table: string, changes: Change[]) =>
 		invoke<number>('apply_changes', { id, database, schema, table, changes }),
 	previewChanges: (schema: string, table: string, changes: Change[]) =>

@@ -737,6 +737,55 @@ async fn browse_pages_follow_the_primary_key() {
 }
 
 #[tokio::test]
+async fn counts_browse_rows_and_falls_back_to_the_estimate() {
+    let (Some(conn), Some(locker)) = (direct().await, direct().await) else {
+        return;
+    };
+    conn.run(
+        "DROP TABLE IF EXISTS it_count;
+         CREATE TABLE it_count (id int PRIMARY KEY);
+         INSERT INTO it_count SELECT generate_series(1, 50);
+         ANALYZE it_count;",
+        10,
+    )
+    .await
+    .unwrap();
+    let request = |filters: &str| -> crate::sql::BrowseRequest {
+        serde_json::from_str(&format!(
+            r#"{{"schema":"public","table":"it_count","filters":{filters},"limit":10,"offset":0}}"#
+        ))
+        .unwrap()
+    };
+    let all = request("[]");
+    let filtered = request(r#"[{"column":"id","op":"lte","value":"5"}]"#);
+    let count = |req| editing::count_rows(&conn.client, req, 200);
+    let exact = |rows| Some(editing::RowCount { rows, exact: true });
+    assert_eq!(count(&all).await.unwrap(), exact(50));
+    assert_eq!(count(&filtered).await.unwrap(), exact(5));
+
+    // A count stuck behind a lock stands in for one on a huge table.
+    locker
+        .client
+        .batch_execute("BEGIN; LOCK TABLE it_count IN ACCESS EXCLUSIVE MODE")
+        .await
+        .unwrap();
+    assert_eq!(
+        count(&all).await.unwrap(),
+        Some(editing::RowCount {
+            rows: 50,
+            exact: false
+        })
+    );
+    assert_eq!(count(&filtered).await.unwrap(), None);
+    locker.client.batch_execute("ROLLBACK").await.unwrap();
+
+    // The timeout was local to the count.
+    let timeout = conn.client.query_one("SHOW statement_timeout", &[]).await;
+    assert_eq!(timeout.unwrap().get::<_, String>(0), "0");
+    assert_eq!(count(&all).await.unwrap(), exact(50));
+}
+
+#[tokio::test]
 async fn inspects_and_edits_roles() {
     let Some(conn) = direct().await else { return };
     let c = &conn.client;

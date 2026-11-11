@@ -213,8 +213,12 @@
 					no rows
 				{/if}
 				{#if result}
-					{#if tab.totalRows != null}
-						of {formatCount(tab.totalRows)}{:else}
+					{#if tab.totalRows?.exact}
+						of {formatCount(tab.totalRows.rows)}{:else if tab.totalRows}
+						<span title="Estimated from table statistics; the exact count took too long"
+							>of ~{formatCount(tab.totalRows.rows)}</span
+						>{:else if tab.counting}
+						· counting…{:else}
 						· total unknown{/if}
 				{/if}
 			</span>
@@ -222,8 +226,8 @@
 				size="icon-sm"
 				variant="ghost"
 				disabled={tab.running ||
-					(tab.totalRows != null
-						? tab.offset + (result?.rows.length ?? 0) >= tab.totalRows
+					(tab.totalRows?.exact
+						? tab.offset + (result?.rows.length ?? 0) >= tab.totalRows.rows
 						: (result?.rows.length ?? 0) < tab.limit)}
 				onclick={() => guarded(() => tab.page(1))}
 				title="Next page"

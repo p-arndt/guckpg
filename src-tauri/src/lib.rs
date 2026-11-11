@@ -96,6 +96,7 @@ pub fn run() {
             commands::run_query,
             commands::query_result_page,
             commands::browse_table,
+            commands::count_table_rows,
             commands::apply_changes,
             commands::preview_changes,
             commands::cancel_query,

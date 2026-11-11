@@ -2,8 +2,10 @@ import {
 	api,
 	toAppError,
 	type AppError,
+	type BrowseRequest,
 	type Column,
 	type QueryOutput,
+	type RowCount,
 	type ViewDetails
 } from '#lib/api.js';
 import { cycleSort, type Sort } from '#lib/grid.js';
@@ -155,13 +157,18 @@ export class TableTab extends TabBase {
 	offset = $state(0);
 	columns = $state.raw<Column[]>([]);
 	lastSql = $state('');
-	totalRows = $state<number | null>(null);
+	/** Rows matching the filters; counted apart from the page, see `load`. */
+	totalRows = $state<RowCount | null>(null);
+	counting = $state(false);
 	/** Unsaved edits in the data grid and in the table designer; `dirty` is their sum. */
 	gridDirty = $state(0);
 	structureDirty = $state(0);
 	/** Bumped to remount the grid, which throws its unsaved edits away. */
 	gridVersion = $state(0);
 	#request = 0;
+	#countRequest = 0;
+	/** The filters the current count belongs to. */
+	#countedFilters: string | null = null;
 	#loading: Promise<void> = Promise.resolve();
 
 	constructor(connectionId: string, database: string, schema: string, table: string) {
@@ -180,26 +187,37 @@ export class TableTab extends TabBase {
 		this.dirty = this.gridDirty + this.structureDirty;
 	}
 
-	/** Load the current page. Only the latest request lands, so quick paging cannot show an older page. */
-	load(): Promise<void> {
+	#browseRequest(): BrowseRequest {
+		return {
+			schema: this.schema,
+			table: this.table,
+			sort: this.sort,
+			filters: this.filters,
+			limit: this.limit,
+			offset: this.offset
+		};
+	}
+
+	/**
+	 * Load the current page. Only the latest request lands, so quick paging cannot show an older page.
+	 * The total is counted afterwards without holding up the page, since an exact count can take
+	 * seconds on big tables. `recount: false` keeps the total when the filters did not change.
+	 */
+	load({ recount = true }: { recount?: boolean } = {}): Promise<void> {
 		const request = ++this.#request;
+		const browse = this.#browseRequest();
 		this.running = true;
 		this.error = null;
 		const loading = api
-			.browseTable(this.id, this.connectionId, this.database, {
-				schema: this.schema,
-				table: this.table,
-				sort: this.sort,
-				filters: this.filters,
-				limit: this.limit,
-				offset: this.offset
-			})
+			.browseTable(this.id, this.connectionId, this.database, browse)
 			.then(
 				(out) => {
 					if (request !== this.#request) return;
 					this.lastSql = out.sql;
-					this.totalRows = out.totalRows;
 					this.output = { results: out.results, elapsedMs: out.elapsedMs };
+					if (recount || this.#countedFilters !== JSON.stringify(browse.filters)) {
+						this.#count(browse);
+					}
 				},
 				(e) => {
 					if (request === this.#request) this.error = toAppError(e);
@@ -210,6 +228,24 @@ export class TableTab extends TabBase {
 			});
 		this.#loading = loading;
 		return loading;
+	}
+
+	#count(browse: BrowseRequest) {
+		const request = ++this.#countRequest;
+		this.#countedFilters = JSON.stringify(browse.filters);
+		this.totalRows = null;
+		this.counting = true;
+		api
+			.countTableRows(this.connectionId, this.database, browse)
+			.then(
+				(count) => {
+					if (request === this.#countRequest) this.totalRows = count;
+				},
+				() => {}
+			)
+			.finally(() => {
+				if (request === this.#countRequest) this.counting = false;
+			});
 	}
 
 	/**
@@ -228,19 +264,19 @@ export class TableTab extends TabBase {
 
 	page(delta: number): Promise<void> {
 		this.offset = Math.max(0, this.offset + delta * this.limit);
-		return this.load();
+		return this.load({ recount: false });
 	}
 
 	sortBy(column: string): Promise<void> {
 		this.sort = cycleSort(this.sort, column);
 		this.offset = 0;
-		return this.load();
+		return this.load({ recount: false });
 	}
 
 	setLimit(limit: number): Promise<void> {
 		this.limit = limit;
 		this.offset = 0;
-		return this.load();
+		return this.load({ recount: false });
 	}
 
 	/** Conditions without a column or a needed value are dropped, so a half-filled row is ignored. */

@@ -243,9 +243,9 @@
 				<p class="text-sm text-ink-2">Run a query to see results</p>
 				<div class="grid grid-cols-[max-content_max-content] items-center gap-x-3 gap-y-2">
 					<kbd class="key justify-self-end">{shortcut('↵')}</kbd>
-					<span>run the statement at the cursor</span>
-					<kbd class="key justify-self-end">{shortcut('↵', true)}</kbd>
 					<span>run the whole script</span>
+					<kbd class="key justify-self-end">{shortcut('↵', true)}</kbd>
+					<span>run the statement at the cursor</span>
 				</div>
 			</div>
 		{/if}

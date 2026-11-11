@@ -337,7 +337,7 @@
 							bind:value={() => editorSql, editSql}
 							completion={tables}
 							onRun={preview}
-							onRunAll={preview}
+							onRunStatement={preview}
 						/>
 					</div>
 				</Resizable.Pane>

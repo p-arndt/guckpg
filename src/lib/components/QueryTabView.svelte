@@ -2,7 +2,7 @@
 	import { shortcut } from '#lib/shortcut.js';
 	import { onMount, tick } from 'svelte';
 	import PlayIcon from '@lucide/svelte/icons/play';
-	import ListVideoIcon from '@lucide/svelte/icons/list-video';
+	import TextCursorIcon from '@lucide/svelte/icons/text-cursor-input';
 	import SquareIcon from '@lucide/svelte/icons/square';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import ListFilterIcon from '@lucide/svelte/icons/list-filter';
@@ -16,7 +16,7 @@
 	import * as Resizable from '#lib/components/ui/resizable/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import type { CompletionTable } from '#lib/api.js';
-	import { statementAt } from '#lib/sql-text.js';
+	import { runTarget, statementAt } from '#lib/sql-text.js';
 	import { catalog } from '#lib/state/catalog.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import type { QueryTab } from '#lib/state/tabs.svelte.js';
@@ -159,22 +159,10 @@
 		editor?.markError(tab.errorOffset);
 	}
 
-	function execute(all: boolean) {
+	function execute(scope: 'script' | 'statement') {
 		if (tab.running || !editor) return;
-		let text: string;
-		let from: number;
-		const selection = editor.selection();
-		if (all) {
-			text = tab.sql;
-			from = 0;
-		} else if (selection) {
-			({ text, from } = selection);
-		} else {
-			const statement = statementAt(tab.sql, editor.cursor());
-			if (!statement) return;
-			({ text, from } = statement);
-		}
-		void run(text, from);
+		const target = runTarget(tab.sql, editor.selection(), editor.cursor(), scope);
+		if (target) void run(target.text, target.from);
 	}
 
 	function explain() {
@@ -339,14 +327,15 @@
 							size="sm"
 							variant="ghost"
 							disabled={tab.running || tab.builderOpen}
-							onclick={() => execute(true)}
+							onclick={() => execute('statement')}
 						>
-							<ListVideoIcon /> Run all
+							<TextCursorIcon /> Run statement
 						</Button>
 					{/snippet}
 				</Tooltip.Trigger>
 				<Tooltip.Content
-					>Run the whole script <kbd class="key">{shortcut('↵', true)}</kbd></Tooltip.Content
+					>Run the statement at the cursor <kbd class="key">{shortcut('↵', true)}</kbd
+					></Tooltip.Content
 				>
 			</Tooltip.Root>
 			<Tooltip.Root>
@@ -361,7 +350,7 @@
 								if (tab.builderOpen && builder) {
 									const sql = builderDraft ?? buildSql(builder).sql;
 									if (sql) runBuilt(sql);
-								} else void execute(false);
+								} else void execute('script');
 							}}
 						>
 							<PlayIcon class="fill-current" />
@@ -376,7 +365,7 @@
 				<Tooltip.Content
 					>{tab.builderOpen
 						? 'Run the built query'
-						: 'Run the selection or the statement at the cursor'}</Tooltip.Content
+						: 'Run the selection or the whole script'}</Tooltip.Content
 				>
 			</Tooltip.Root>
 		</div>
@@ -397,8 +386,8 @@
 					bind:this={editor}
 					bind:value={tab.sql}
 					{completion}
-					onRun={() => execute(false)}
-					onRunAll={() => execute(true)}
+					onRun={() => execute('script')}
+					onRunStatement={() => execute('statement')}
 				/>
 			</div>
 			{#if tab.builderOpen && builder}

@@ -101,3 +101,19 @@ export function statementAt(sql: string, pos: number): Statement | undefined {
 	}
 	return best ?? all[0];
 }
+
+/**
+ * What a run executes. A selection always wins; otherwise `script` runs the
+ * whole editor like Navicat, so a pasted multi-statement script runs in full,
+ * and `statement` runs only the statement at the cursor.
+ */
+export function runTarget(
+	sql: string,
+	selection: { from: number; text: string } | null | undefined,
+	cursor: number,
+	scope: 'script' | 'statement'
+): { from: number; text: string } | undefined {
+	if (selection) return selection;
+	if (scope === 'script') return sql.trim() ? { from: 0, text: sql } : undefined;
+	return statementAt(sql, cursor);
+}

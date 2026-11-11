@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { splitStatements, statementAt } from './sql-text';
+import { runTarget, splitStatements, statementAt } from './sql-text';
 
 const texts = (sql: string) => splitStatements(sql).map((s) => s.text);
 
@@ -77,5 +77,32 @@ describe('statementAt', () => {
 
 	it('returns undefined for an empty script', () => {
 		expect(statementAt('  ', 1)).toBeUndefined();
+	});
+});
+
+describe('runTarget', () => {
+	const script = 'select 1;\nselect 2;\nselect 3;';
+
+	it('runs the whole script by default so pasted scripts run in full', () => {
+		expect(runTarget(script, null, 0, 'script')).toEqual({ from: 0, text: script });
+	});
+
+	it('runs only the statement at the cursor when asked', () => {
+		expect(runTarget(script, null, 12, 'statement')).toEqual({
+			from: 10,
+			to: 18,
+			text: 'select 2'
+		});
+	});
+
+	it('prefers the selection in both scopes', () => {
+		const selection = { from: 10, text: 'select 2' };
+		expect(runTarget(script, selection, 0, 'script')).toBe(selection);
+		expect(runTarget(script, selection, 0, 'statement')).toBe(selection);
+	});
+
+	it('runs nothing for an empty editor', () => {
+		expect(runTarget('  \n', null, 0, 'script')).toBeUndefined();
+		expect(runTarget('  \n', null, 0, 'statement')).toBeUndefined();
 	});
 });

@@ -20,12 +20,19 @@
 		value: string;
 		completion?: CompletionTable[];
 		autofocus?: boolean;
-		/** Run the selection or the statement under the cursor. */
+		/** Run the selection or the whole script. */
 		onRun?: () => void;
-		onRunAll?: () => void;
+		/** Run the selection or the statement under the cursor. */
+		onRunStatement?: () => void;
 	}
 
-	let { value = $bindable(), completion = [], autofocus = true, onRun, onRunAll }: Props = $props();
+	let {
+		value = $bindable(),
+		completion = [],
+		autofocus = true,
+		onRun,
+		onRunStatement
+	}: Props = $props();
 
 	let host: HTMLDivElement;
 	let view: EditorView | undefined;
@@ -161,7 +168,7 @@
 					Prec.highest(
 						keymap.of([
 							{ key: 'Mod-Enter', run: () => (onRun?.(), true) },
-							{ key: 'Shift-Mod-Enter', run: () => (onRunAll?.(), true) }
+							{ key: 'Shift-Mod-Enter', run: () => (onRunStatement?.(), true) }
 						])
 					),
 					basicSetup,

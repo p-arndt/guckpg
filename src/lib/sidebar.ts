@@ -11,6 +11,39 @@ export interface SidebarLayout {
 	loose: ConnectionConfig[];
 }
 
+export type SortMode = 'manual' | 'name' | 'modified' | 'used';
+
+export const SORT_MODES: { value: SortMode; label: string }[] = [
+	{ value: 'manual', label: 'Custom order' },
+	{ value: 'name', label: 'Name' },
+	{ value: 'modified', label: 'Last modified' },
+	{ value: 'used', label: 'Last used' }
+];
+
+export interface SortOptions {
+	mode: SortMode;
+	/** Last connect per connection id, in ms since the epoch. */
+	lastUsed?: Record<string, number>;
+}
+
+const byName = (a: string, b: string) =>
+	a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+
+/** Sort for display. Ties and connections without a timestamp keep the custom order. */
+export function sortConnections(list: ConnectionConfig[], sort: SortOptions): ConnectionConfig[] {
+	const lastUsed = sort.lastUsed ?? {};
+	switch (sort.mode) {
+		case 'name':
+			return list.toSorted((a, b) => byName(a.name, b.name));
+		case 'modified':
+			return list.toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+		case 'used':
+			return list.toSorted((a, b) => (lastUsed[b.id] ?? 0) - (lastUsed[a.id] ?? 0));
+		default:
+			return list;
+	}
+}
+
 function matches(c: ConnectionConfig, needle: string): boolean {
 	return [c.name, c.host, c.database, c.user, c.ssh?.host ?? ''].some((v) =>
 		v.toLowerCase().includes(needle)
@@ -20,18 +53,22 @@ function matches(c: ConnectionConfig, needle: string): boolean {
 /**
  * Group connections by folder. Folders come in `folderOrder` first, then any
  * others in order of appearance. Empty folders only show without a filter;
- * a filter that matches a folder's name shows the whole folder.
+ * a filter that matches a folder's name shows the whole folder. Sorting by
+ * name also sorts the folders; the other modes keep the folder order.
  */
 export function sidebarLayout(
-	list: ConnectionConfig[],
+	all: ConnectionConfig[],
 	folderOrder: string[],
-	filter = ''
+	filter = '',
+	sort: SortOptions = { mode: 'manual' }
 ): SidebarLayout {
 	const needle = filter.trim().toLowerCase();
+	const list = sortConnections(all, sort);
 	const names = [...folderOrder];
 	for (const c of list) {
 		if (c.folder && !names.includes(c.folder)) names.push(c.folder);
 	}
+	if (sort.mode === 'name') names.sort(byName);
 	const folders: FolderGroup[] = [];
 	for (const name of names) {
 		const inFolder = list.filter((c) => c.folder === name);

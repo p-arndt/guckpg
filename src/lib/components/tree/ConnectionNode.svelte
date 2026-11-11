@@ -18,6 +18,8 @@
 		connection: ConnectionConfig;
 		depth?: number;
 		showFolder?: boolean;
+		/** False while the list is sorted: a drop only picks the folder. */
+		reorderable?: boolean;
 		/** Every folder name, for "Move to folder". */
 		folders: string[];
 		onEdit: (c: ConnectionConfig) => void;
@@ -32,6 +34,7 @@
 		connection,
 		depth = 0,
 		showFolder = false,
+		reorderable = true,
 		folders,
 		onEdit,
 		onDelete,
@@ -133,7 +136,7 @@
 	<ContextMenu.Trigger>
 		{#snippet child({ props })}
 			<div class="relative shrink-0">
-				{#if dropTarget}
+				{#if dropTarget && reorderable}
 					<div
 						class="pointer-events-none absolute inset-x-1 -top-px z-10 h-0.5 rounded-full bg-signal"
 					></div>

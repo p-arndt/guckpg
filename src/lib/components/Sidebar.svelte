@@ -1,12 +1,21 @@
 <script lang="ts">
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
+	import ArrowUpDownIcon from '@lucide/svelte/icons/arrow-up-down';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '#lib/components/ui/button/index.js';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import { errorMessage, type ConnectionConfig, type Placement } from '#lib/api.js';
-	import { moveConnection, renameFolder, sidebarLayout, treeKeyMove } from '#lib/sidebar.js';
+	import {
+		moveConnection,
+		renameFolder,
+		SORT_MODES,
+		sidebarLayout,
+		treeKeyMove,
+		type SortMode
+	} from '#lib/sidebar.js';
 	import { connections } from '#lib/state/connections.svelte.js';
 	import { prompt } from '#lib/state/prompt.svelte.js';
 	import { sidebar } from '#lib/state/sidebar.svelte.js';
@@ -24,7 +33,9 @@
 	let filterInput = $state<HTMLInputElement | null>(null);
 	let rootDrop = $state(false);
 
-	const layout = $derived(sidebarLayout(connections.list, sidebar.folders, sidebar.filter));
+	const sort = $derived({ mode: sidebar.sort, lastUsed: sidebar.lastUsed });
+	const manual = $derived(sidebar.sort === 'manual');
+	const layout = $derived(sidebarLayout(connections.list, sidebar.folders, sidebar.filter, sort));
 	const folderNames = $derived(
 		sidebarLayout(connections.list, sidebar.folders).folders.map((f) => f.name)
 	);
@@ -50,7 +61,9 @@
 	}
 
 	function move(id: string, folder: string | null, beforeId: string | null) {
-		void arrange(moveConnection(connections.list, id, folder, beforeId));
+		// A sorted list has no position to drop into, only a folder.
+		const before = manual ? beforeId : null;
+		void arrange(moveConnection(connections.list, id, folder, before));
 	}
 
 	async function duplicate(c: ConnectionConfig) {
@@ -111,13 +124,20 @@
 		else rows[move.toggle].click();
 	}
 
-	function onRootDragOver(e: DragEvent) {
-		if (!sidebar.dragging) return;
+	/** Empty space in the tree takes a connection out of its folder. */
+	function isEmptySpace(e: DragEvent & { currentTarget: HTMLElement }): boolean {
+		const target = e.target as HTMLElement;
+		return target === e.currentTarget || target.hasAttribute('data-root-drop');
+	}
+
+	function onRootDragOver(e: DragEvent & { currentTarget: HTMLElement }) {
+		if (!sidebar.dragging || !isEmptySpace(e)) return;
 		e.preventDefault();
 		rootDrop = true;
 	}
 
-	function onRootDrop(e: DragEvent) {
+	function onRootDrop(e: DragEvent & { currentTarget: HTMLElement }) {
+		if (!isEmptySpace(e)) return;
 		e.preventDefault();
 		rootDrop = false;
 		const id = sidebar.dragging;
@@ -131,6 +151,7 @@
 		{connection}
 		{depth}
 		{showFolder}
+		reorderable={manual}
 		folders={folderNames}
 		{onEdit}
 		{onDelete}
@@ -144,6 +165,28 @@
 	<h2 class="text-[13px] font-medium text-muted-foreground">Connections</h2>
 	<div class="flex items-center">
 		<NavicatImport />
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger>
+				{#snippet child({ props })}
+					<Button {...props} size="icon-xs" variant="ghost" title="Sort connections">
+						<ArrowUpDownIcon />
+					</Button>
+				{/snippet}
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="end" class="w-44">
+				<DropdownMenu.Label class="text-xs font-normal text-muted-foreground">
+					Sort by
+				</DropdownMenu.Label>
+				<DropdownMenu.RadioGroup
+					value={sidebar.sort}
+					onValueChange={(v) => sidebar.setSort(v as SortMode)}
+				>
+					{#each SORT_MODES as mode (mode.value)}
+						<DropdownMenu.RadioItem value={mode.value}>{mode.label}</DropdownMenu.RadioItem>
+					{/each}
+				</DropdownMenu.RadioGroup>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
 		<Button size="icon-xs" variant="ghost" title="New folder" onclick={() => newFolder()}>
 			<FolderPlusIcon />
 		</Button>
@@ -187,11 +230,17 @@
 {/if}
 
 <div
-	class="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2"
+	class="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-lg px-2 pb-2 transition-[background-color] duration-(--dur-micro) {rootDrop &&
+	sidebar.dragging
+		? 'bg-signal-soft/50'
+		: ''}"
 	role="tree"
 	aria-label="Connections"
 	tabindex="-1"
 	onkeydown={onTreeKeydown}
+	ondragover={onRootDragOver}
+	ondragleave={() => (rootDrop = false)}
+	ondrop={onRootDrop}
 >
 	{#if connected.length}
 		<p
@@ -245,18 +294,6 @@
 		</div>
 	{/if}
 
-	<!-- Room to drop a connection out of its folder. -->
-	{#if sidebar.dragging}
-		<div
-			role="presentation"
-			ondragover={onRootDragOver}
-			ondragleave={() => (rootDrop = false)}
-			ondrop={onRootDrop}
-			class="mt-1 flex min-h-10 flex-1 items-center justify-center rounded-lg border border-dashed border-rule-2 text-xs text-muted-foreground {rootDrop
-				? 'border-signal bg-signal-soft text-foreground'
-				: ''}"
-		>
-			Drop here for no folder
-		</div>
-	{/if}
+	<!-- Always there, so a full list still has empty space to drop onto. -->
+	<div data-root-drop role="presentation" class="min-h-6 flex-1"></div>
 </div>

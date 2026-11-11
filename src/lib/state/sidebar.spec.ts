@@ -35,6 +35,24 @@ describe('Sidebar', () => {
 		expect(s.folders).toEqual(['x']);
 	});
 
+	it('persists the sort mode and last use', () => {
+		const storage = memoryStorage();
+		const a = new Sidebar(storage);
+		expect(a.sort).toBe('manual');
+		a.setSort('name');
+		a.markUsed('one', 42);
+
+		const b = new Sidebar(storage);
+		expect(b.sort).toBe('name');
+		expect(b.lastUsed).toEqual({ one: 42 });
+	});
+
+	it('falls back to the custom order for an unknown sort mode', () => {
+		const storage = memoryStorage();
+		storage.setItem('guckpg.sidebar', JSON.stringify({ sort: 'size' }));
+		expect(new Sidebar(storage).sort).toBe('manual');
+	});
+
 	it('ignores corrupt state', () => {
 		const storage = memoryStorage();
 		storage.setItem('guckpg.sidebar', '{nope');

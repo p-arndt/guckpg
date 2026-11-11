@@ -5,6 +5,7 @@ import {
 	type Secrets,
 	type ServerInfo
 } from '#lib/api.js';
+import { sidebar } from './sidebar.svelte.js';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -29,6 +30,7 @@ export class Connections {
 			const info = await api.connect(id);
 			this.info[id] = info;
 			this.status[id] = 'connected';
+			sidebar.markUsed(id);
 			return info;
 		} catch (e) {
 			this.status[id] = 'error';

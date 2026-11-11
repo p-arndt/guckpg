@@ -5,6 +5,7 @@ import {
 	moveConnection,
 	renameFolder,
 	sidebarLayout,
+	sortConnections,
 	treeKeyMove
 } from './sidebar.js';
 
@@ -53,6 +54,39 @@ describe('sidebarLayout', () => {
 		const list = [conn('a', 'production'), conn('b', 'production')];
 		const { folders } = sidebarLayout(list, [], 'prod');
 		expect(names(folders[0].connections)).toEqual(['a', 'b']);
+	});
+});
+
+describe('sortConnections', () => {
+	const list = [
+		conn('b2', null, { name: 'db10', updatedAt: 100 }),
+		conn('a', null, { name: 'Alpha' }),
+		conn('b1', null, { name: 'db9', updatedAt: 300 })
+	];
+
+	it('keeps the custom order', () => {
+		expect(names(sortConnections(list, { mode: 'manual' }))).toEqual(['b2', 'a', 'b1']);
+	});
+
+	it('sorts by name, case-insensitive and numeric', () => {
+		expect(names(sortConnections(list, { mode: 'name' }))).toEqual(['a', 'b1', 'b2']);
+	});
+
+	it('puts the newest change first, connections without a timestamp last', () => {
+		expect(names(sortConnections(list, { mode: 'modified' }))).toEqual(['b1', 'b2', 'a']);
+	});
+
+	it('puts the last used first and keeps the custom order for unused ones', () => {
+		const sorted = sortConnections(list, { mode: 'used', lastUsed: { a: 5 } });
+		expect(names(sorted)).toEqual(['a', 'b2', 'b1']);
+	});
+
+	it('sorts folders by name only when sorting by name', () => {
+		const grouped = [conn('x', 'zeta'), conn('y', 'alpha', { updatedAt: 1 })];
+		const byName = sidebarLayout(grouped, ['zeta'], '', { mode: 'name' });
+		expect(byName.folders.map((f) => f.name)).toEqual(['alpha', 'zeta']);
+		const byModified = sidebarLayout(grouped, ['zeta'], '', { mode: 'modified' });
+		expect(byModified.folders.map((f) => f.name)).toEqual(['zeta', 'alpha']);
 	});
 });
 

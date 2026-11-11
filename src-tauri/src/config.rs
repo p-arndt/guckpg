@@ -87,6 +87,10 @@ pub struct ConnectionConfig {
     /// Sidebar folder; `None` shows the connection at the top level.
     #[serde(default)]
     pub folder: Option<String>,
+    /// Last save, in milliseconds since the Unix epoch, for "Last modified"
+    /// sorting. Set by the store; connections saved before it existed have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<u64>,
 }
 
 /// Where one connection sits in the sidebar.
@@ -388,7 +392,8 @@ impl ConnectionStore {
         })
     }
 
-    pub fn upsert(&self, config: ConnectionConfig) -> AppResult<()> {
+    pub fn upsert(&self, mut config: ConnectionConfig) -> AppResult<()> {
+        config.updated_at = Some(now_millis());
         self.with(|all| {
             let mut all = all.to_vec();
             match all.iter_mut().find(|c| c.id == config.id) {
@@ -428,6 +433,7 @@ impl ConnectionStore {
             let mut copy = all[index].clone();
             copy.id = new_id;
             copy.name = copy_name(&copy.name, &all);
+            copy.updated_at = Some(now_millis());
             all.insert(index + 1, copy.clone());
             Ok((Some(all), copy))
         })
@@ -444,6 +450,12 @@ impl ConnectionStore {
         std::fs::rename(&tmp, &self.path)?;
         Ok(())
     }
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Write a file only the current user can read: it names hosts, users and
@@ -561,6 +573,7 @@ mod tests {
 
         let copy = store.duplicate("a", "a2".into()).unwrap();
         assert_eq!(copy.name, "local copy");
+        assert!(copy.updated_at.is_some());
         assert_eq!(copy.folder.as_deref(), Some("prod"));
         assert_eq!(ids(&store.list().unwrap()), ["a", "a2", "b"]);
 
@@ -586,6 +599,7 @@ mod tests {
         let all = store.list().unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(store.get("a").unwrap().name, "renamed");
+        assert!(all.iter().all(|c| c.updated_at.is_some()));
 
         store.remove("a").unwrap();
         assert!(store.get("a").is_err());

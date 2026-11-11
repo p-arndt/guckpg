@@ -148,6 +148,7 @@ fn entry(attrs: &Attributes) -> Result<Entry, &'static str> {
         color: None,
         ssh,
         folder: None,
+        updated_at: None,
     };
     config
         .validate()

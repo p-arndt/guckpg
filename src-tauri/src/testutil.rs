@@ -19,6 +19,7 @@ pub fn connection(id: &str) -> ConnectionConfig {
         color: None,
         ssh: None,
         folder: None,
+        updated_at: None,
     }
 }
 

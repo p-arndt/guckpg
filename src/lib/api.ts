@@ -29,6 +29,8 @@ export interface ConnectionConfig {
 	ssh: SshConfig | null;
 	/** Sidebar folder; null shows the connection at the top level. */
 	folder: string | null;
+	/** Last save in ms since the epoch; set by the backend. */
+	updatedAt?: number | null;
 }
 
 export interface Placement {
